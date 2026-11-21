@@ -23,10 +23,17 @@ test('test incident notices preview safely and send once to the selected chat',a
   }));
   const {createTelegramRouter} = await import(pathToFileURL(join(folder,'telegram-routing.mjs')));
   const sent = [];
+  const owner = '100004322';
+  let profileLookups = 0;
   const router = createTelegramRouter({
-    connect:async()=>({token:'900000000:mock'}),
+    connect:async()=>({token:'900000000:mock',owner}),
     call:async(token,method,body)=>{
       if (method==='getChatMember') return {ok:true,result:{status:'member'}};
+      if (method==='getChat') {
+        assert.equal(body.chat_id,owner);
+        profileLookups++;
+        return {ok:true,result:{type:'private',id:Number(owner),first_name:'Example',last_name:'Owner'}};
+      }
       assert.equal(method,'sendMessage');
       sent.push(body);
       return {ok:true,result:{message_id:1}};
@@ -40,6 +47,10 @@ test('test incident notices preview safely and send once to the selected chat',a
   };
   const group = await router.previewNotice({...input,recipient:'team'});
   const direct = await router.previewNotice({...input,recipient:person.id});
+  const [routing,defaultPreview] = await Promise.all([router.list(),router.previewNotice({...input,recipient:'default'})]);
+  assert.equal(routing.people.find(person=>person.id==='default').label,'Example Owner');
+  assert.equal(defaultPreview.label,'Example Owner');
+  assert.equal(profileLookups,1);
   assert.equal(group.group,true);
   assert.equal(direct.group,false);
   assert.equal(direct.test,true);

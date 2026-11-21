@@ -38,7 +38,7 @@ small {font-size:.84rem}
 .top nav a {padding:.34rem .7rem;font-size:.9rem;font-weight:650;text-decoration:none;white-space:nowrap}
 .top nav a:hover {text-decoration:underline}
 .top nav a[aria-current] {background:var(--ink);color:var(--paper)}
-.top-right select {font-size:.875rem}
+.top-right select {font-size:.875rem;max-width:min(230px,45vw)}
 #chat-count {display:inline-grid;place-items:center;background:var(--red);color:white;min-width:19px;border-radius:50%;font-size:12px}
 .hero {border-bottom:2px solid var(--ink);display:grid;grid-template-columns:1fr 235px;align-items:center;gap:32px;padding:28px 0 24px;position:relative}
 .hero h1 {font:normal clamp(3.8rem,8.4vw,8.1rem)/.9 var(--display);letter-spacing:-.085em;margin:12px 0 15px}
@@ -142,7 +142,16 @@ details p:last-child {margin-bottom:0}
 footer {border-top:1px solid var(--ink);display:flex;justify-content:space-between;gap:12px;margin:28px 0 0;padding:11px 0 20px;font-size:.75rem;color:var(--quiet)}
 dialog {width:min(620px,calc(100% - 28px));max-height:87vh;padding:0;background:var(--sheet);color:var(--ink);border:1px solid var(--ink);box-shadow:7px 7px var(--ink)}
 dialog::backdrop {background:#1718128c}
-#assistant-window {position:fixed;inset:auto max(14px,3vw) 18px auto;margin:0;width:min(520px,calc(100% - 34px));z-index:6;max-height:75vh}
+#assistant-window {
+  position:fixed;inset:auto max(14px,3vw) max(18px,env(safe-area-inset-bottom)) auto;
+  margin:0;width:min(520px,calc(100% - 34px));z-index:6;
+  max-height:calc(100vh - 36px);max-height:min(80dvh,calc(100dvh - 36px));
+  overflow:hidden;
+}
+#assistant-window[open] {display:flex;flex-direction:column}
+#assistant-window .dialog-head {flex:none}
+#assistant-window .dialog-body {flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-gutter:stable}
+#assistant-window .dialog-body:focus-visible {outline-offset:-3px}
 .dialog-head {display:flex;align-items:start;justify-content:space-between;gap:10px;padding:15px;background:var(--acid);color:#191a14;border-bottom:1px solid #191a14}
 .dialog-head h2 {font:normal 1.8rem/1.08 var(--display);margin:.25rem 0;letter-spacing:-.04em}
 .dialog-body {padding:16px}

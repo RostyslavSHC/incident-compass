@@ -43,7 +43,9 @@ function read() {
   catch { return initial(); }
 }
 let workspace = read();
-let actor = sessionStorage.getItem('ic-actor') || teammates[0];
+let actorChoice = sessionStorage.getItem('ic-actor') || teammates[0];
+let actor = teammates.includes(actorChoice) ? actorChoice : teammates[0];
+let telegramResponders = new Map();
 let selected = 'INC-121';
 let activeTab = 'brief';
 let cutoff = '23:59';
@@ -78,14 +80,33 @@ const channelSetup = {
   telegram:{name:'Telegram',provider:'Telegram Bot API',setup:'https://t.me/BotFather',fields:[['TELEGRAM_BOT_TOKEN','BotFather token',true],['TELEGRAM_CHAT_ID','Chat ID or public channel username']]},
 };
 
-persona.innerHTML = teammates.map(name => `<option>${html(name)}</option>`).join('');
-persona.value = actor;
+renderPersonaChoices();
 document.body.classList.toggle('night', localStorage.getItem('ic-night') === 'true');
 night.setAttribute('aria-pressed', String(document.body.classList.contains('night')));
 
 function view() {
   const hash = location.hash.slice(1);
   return pages.includes(hash) ? hash : 'desk';
+}
+
+function renderPersonaChoices() {
+  persona.innerHTML = `
+    ${telegramResponders.size ? `<optgroup label="Paired Telegram responders">${[...telegramResponders].map(([key,label])=>
+      `<option value="${html(key)}">${html(label)}</option>`).join('')}</optgroup>` : ''}
+    <optgroup label="Demo teammates">${teammates.map(name=>`<option value="${html(name)}">${html(name)}</option>`).join('')}</optgroup>`;
+  persona.value = telegramResponders.has(actorChoice) || teammates.includes(actorChoice) ? actorChoice : teammates[0];
+}
+
+function syncTelegramResponders(people) {
+  const responders = new Map(people.map(person=>[`telegram:${person.id}:${person.destination}`,person.label]));
+  if (responders.size===telegramResponders.size && [...responders].every(([key,label])=>telegramResponders.get(key)===label)) return;
+  telegramResponders = responders;
+  renderPersonaChoices();
+  const name = telegramResponders.get(persona.value) || persona.value;
+  if (name!==actor) {
+    actor = name;
+    render();
+  }
 }
 const severityIcons = {P1:'!',P2:'↑',P3:'•',P4:'↓'};
 
@@ -975,6 +996,7 @@ async function showTelegramRouting() {
   try {
     const info=await deliveryApi('telegram-routing');
     setAutomaticIndicator(info.auto.enabled);
+    syncTelegramResponders(info.people);
     if(!dialog.open||!anchor.isConnected)return;
     openDialog('Alert delivery','Telegram routing',`<p><strong>P1 Critical</strong> goes directly to the team group. <strong>P2 High</strong> and <strong>P3 Monitor</strong> go to a private responder first.</p>
       <div class="panel"><div class="row"><h3>Automatic Telegram alerts</h3><span class="badge ${info.auto.enabled?'P2':'neutral'}">${info.auto.enabled?'On':'Off'}</span></div>
@@ -1022,7 +1044,10 @@ function setAutomaticIndicator(enabled) {
 }
 
 function refreshAutomaticIndicator() {
-  if(location.protocol.startsWith('http'))void deliveryApi('telegram-routing').then(info=>setAutomaticIndicator(info.auto.enabled)).catch(()=>{});
+  if(location.protocol.startsWith('http')) void deliveryApi('telegram-routing').then(info=>{
+    setAutomaticIndicator(info.auto.enabled);
+    syncTelegramResponders(info.people);
+  }).catch(()=>{});
 }
 
 async function createEnrollment(button) {
@@ -1356,7 +1381,7 @@ function assistant() {
     return;
   }
   const incident = byId(selected);
-  assistantWindow.innerHTML = `<div class="dialog-head"><div><div class="kicker">Incident assistant / ${incident.id}</div><h2 id="assistant-title">Ask about this incident</h2></div><button data-close aria-label="Close assistant">✕</button></div><div class="dialog-body">
+  assistantWindow.innerHTML = `<div class="dialog-head"><div><div class="kicker">Incident assistant / ${incident.id}</div><h2 id="assistant-title">Ask about this incident</h2></div><button data-close aria-label="Close assistant">✕</button></div><div class="dialog-body" role="region" aria-label="Incident assistant conversation" tabindex="0">
     <p class="quiet" id="assistant-mode">${workspace.custom[incident.id] ? 'Test event · Uses the local report and sample library.' : connected ? 'Gemini · Uses the selected evidence snapshot.' : 'Demo mode · Answers come from the sample records.'}</p>
     <div class="buttons">${['What happened, in detail?', 'Which runbook should I use?', incident.document==='DG-023' ? 'What would distinguish the likely causes?' : 'Have we seen this before?', 'How should I verify recovery?'].map(q=>`<button class="small" data-prompt="${html(q)}">${html(q)}</button>`).join('')}</div>
     <form id="assistant-form"><input id="question" aria-label="Ask the incident assistant" maxlength="400" placeholder="Ask about the evidence…" required>
@@ -1424,6 +1449,12 @@ async function ask(question, speak = false) {
     `<li><strong>${html(turn.question)}</strong><p>${html(turn.reply)}</p></li>`).join('');
   conversation = [...conversation,{question,reply}].slice(-3);
   control.disabled = false;
+  const body = answer.closest('.dialog-body');
+  const answerTop = answer.getBoundingClientRect().top;
+  const bounds = body.getBoundingClientRect();
+  if (answerTop < bounds.top || answerTop > bounds.bottom - 48) {
+    body.scrollTop += answerTop - bounds.top - 18;
+  }
   if (speak) readAloud(reply);
 }
 
@@ -1787,8 +1818,9 @@ assistantWindow.addEventListener('close',()=>{
   window.speechSynthesis?.cancel();
 });
 persona.addEventListener('change',()=>{
-  actor = persona.value;
-  sessionStorage.setItem('ic-actor',actor);
+  actorChoice = persona.value;
+  actor = telegramResponders.get(actorChoice) || actorChoice;
+  sessionStorage.setItem('ic-actor',actorChoice);
   render();
 });
 night.addEventListener('click',()=>{

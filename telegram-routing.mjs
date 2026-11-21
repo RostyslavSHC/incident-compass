@@ -13,7 +13,10 @@ const masked = value=>'•••• '+String(value).slice(-4);
 const botId = token=>token?.split(':')[0] || '';
 const privateId = id=>/^[1-9]\d{3,24}$/.test(id || '');
 const groupId = id=>/^-[1-9]\d{3,24}$/.test(id || '');
-const responderName=user=>[user?.first_name,user?.last_name].filter(Boolean).join(' ').slice(0,100)||'Telegram responder';
+const telegramName=user=>[user?.first_name,user?.last_name].filter(Boolean).join(' ').trim().slice(0,100)
+  || (user?.username ? '@'+user.username : '');
+const responderName=user=>telegramName(user)||'Telegram responder';
+const ownerProfileKey=config=>config.token && privateId(config.owner) ? botId(config.token)+'/'+config.owner : '';
 const currentMember=result=>result.ok&&['creator','administrator','member','restricted'].includes(result.result?.status)&&
   (result.result.status!=='restricted'||result.result.is_member);
 
@@ -77,6 +80,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
   let running=false;
   const pending=new Map();
   const notices=new Map();
+  let ownerProfile;
   const exclusive=operation=>{
     const result=queue.then(operation);
     queue=result.catch(()=>{});
@@ -85,11 +89,38 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
   function targets(state,config) {
     const known=state.connections[botId(config.token)] || {};
     const people=known.people || [];
-    const owner=privateId(config.owner) ? {id:'default',chat:config.owner,label:people.find(item=>item.chat===config.owner)?.label||'Connected private chat'} : undefined;
+    const account = people.find(item=>item.chat===config.owner);
+    const label = account?.label || (ownerProfile?.key===ownerProfileKey(config) ? ownerProfile.label : null);
+    const owner=privateId(config.owner) ? {id:'default',chat:config.owner,label:label||'Connected private chat'} : undefined;
     return {team:known.team,people:[owner,...people.filter(item=>item.chat!==config.owner)].filter(Boolean),auto:known.auto||{},enrollment:known.enrollment};
+  }
+  async function resolveOwnerProfile(state,config) {
+    const key = ownerProfileKey(config);
+    if (!key || state.connections[botId(config.token)]?.people?.some(person=>person.chat===config.owner&&person.label)) return;
+    if (ownerProfile?.key===key) {
+      if (ownerProfile.pending) return ownerProfile.pending;
+      if (ownerProfile.expires>now()) return;
+    }
+    const profile = {key,label:ownerProfile?.key===key ? ownerProfile.label : ''};
+    ownerProfile = profile;
+    profile.pending = (async()=>{
+      try {
+        const chat = await call(config.token,'getChat',{chat_id:config.owner});
+        const label = chat.ok && chat.result?.type==='private' && String(chat.result.id)===config.owner
+          ? telegramName(chat.result) : '';
+        if (label) profile.label = label;
+        profile.expires = now() + (label ? 10*60_000 : 30_000);
+      } catch {
+        profile.expires = now() + 30_000;
+      } finally {
+        delete profile.pending;
+      }
+    })();
+    return profile.pending;
   }
   async function list() {
     const [state,config]=await Promise.all([load(),connect()]);
+    await resolveOwnerProfile(state,config);
     const destinations=targets(state,config);
     return {
       botConnected:Boolean(config.token),
@@ -130,6 +161,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     const wait=Number(input.wait);
     if (!incident || typeof level!=='string' || !Object.hasOwn(presentations,level) || !secondsAllowed.has(wait)) return {error:'Choose an incident, urgency, and response window.'};
     const [state,config]=await Promise.all([load(),connect()]);
+    if(input.owner==='default') await resolveOwnerProfile(state,config);
     const {team,people}=targets(state,config);
     const owner=people.find(person=>person.id===input.owner);
     const direct=level==='P1';
@@ -155,6 +187,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
       ? renderTelegram(incident,level) : renderTestNotice(input.incident,level,input.simulation);
     if(!message)return {error:'Choose a prepared incident or a valid test event and severity.'};
     const [state,config]=await Promise.all([load(),connect()]);
+    if(input.recipient==='default') await resolveOwnerProfile(state,config);
     const target=noticeTarget(state,config,input.recipient);
     if(!config.token||!target)return {error:'Choose the paired team group or a paired private responder.'};
     for(const [id,entry] of notices)if(entry.expires<=now())notices.delete(id);
