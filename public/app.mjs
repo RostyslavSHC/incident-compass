@@ -421,7 +421,7 @@ function simulator() {
     <button class="small primary" data-fire-template="${index}" aria-label="Run ${html(item.title)}">Run now</button></div></li>`).join('');
   return layout('Incident simulator.','Create a test incident and walk it through the same desk, alert inbox, and archive.',`
     <section class="simulation-banner row"><div><span class="badge test-badge">Demo mode</span>
-    <p>Simulator events stay in this workspace. Existing prepared alerts keep their Telegram settings.</p></div>
+    <p>Simulator events alert this dashboard immediately. Open a test event to review and send it to Telegram.</p></div>
     <div class="buttons"><button class="small" data-run-burst>Run all four severities</button>
     <button class="small danger" data-reset-custom ${count?'':'disabled'}>Reset custom simulations</button></div></section>
     <section class="template-section" aria-labelledby="template-title"><h2 id="template-title">Demo scenarios</h2>
@@ -579,7 +579,7 @@ function desk() {
         `<li><span class="badge ${level}">${level}</span><span class="severity-track" aria-hidden="true"><i class="${level}" style="--share:${count/(queue.length || 1)}"></i></span><strong aria-label="${count} active">${count}</strong></li>`).join('')}</ul>
       ${queue.map(item=>`<button class="queue-item ${workspace.custom[item.id] && item.triggeredAt>Date.now()-10000?'fresh-incident':''}" data-case="${item.id}" aria-pressed="${item.id===incident.id}"><span class="row"><span>${badge(incidentPriority(item))} <small>${levelName(incidentPriority(item),Boolean(workspace.custom[item.id]))}</small></span><small class="mono">${item.alert} ET</small></span><strong>${html(item.title)}</strong><small>${html(item.service)} · ${item.variant}</small></button>`).join('') || '<p class="quiet">No active incidents.</p>'}
       <div class="simulate"><div class="simulate-head"><span class="kicker">Prepared alerts</span><button class="small" data-reset>Reset prepared alerts</button></div>
-      <p class="small quiet" data-auto-telegram-hint>${automaticTelegram?'New simulations automatically send to Telegram.':'Simulations stay in the dashboard while Telegram automation is off.'}</p>
+      <p class="small quiet" data-auto-telegram-hint>${automaticTelegram?'Prepared alerts automatically route to Telegram when triggered.':'Prepared alerts stay in the dashboard while Telegram automation is off.'}</p>
       <div class="buttons">${scenarios.map(item=>`<button class="small" data-trigger="${item.id}">${item.variant}</button>`).join('')}</div></div></aside>
       <article class="case"><div class="case-head"><div class="case-top"><span class="case-meta">${incident.id} / ${html(incident.service)} / ${incident.alert} ET</span>
       <div class="actions">${custom?.triggeredAt===null ? '' : '<button class="small" data-handoff>Draft handoff</button><button class="primary small" data-assistant>✳ Ask assistant</button>'}</div></div>
@@ -588,7 +588,8 @@ function desk() {
       ${custom?'':'<button class="small" data-priority>Change priority</button>'}</div></div>
       ${custom ? `<div class="handoff"><div class="buttons">
         ${custom.triggeredAt!==null ? `${custom.status==='reported'?'<button class="small primary" data-test-status="acknowledged">Acknowledge</button>':''}
-        <button class="small" data-test-status="update">Update incident</button>${custom.status!=='resolved'?'<button class="small" data-test-status="resolved">Resolve</button>':''}` : ''}
+        <button class="small" data-test-status="update">Update incident</button>${custom.status!=='resolved'?'<button class="small" data-test-status="resolved">Resolve</button>':''}
+        <button class="small" data-notify-telegram="${custom.id}">Notify in Telegram</button>` : ''}
         <button class="small danger" data-delete-custom="${custom.id}">${custom.triggeredAt===null?'Cancel schedule':'Delete test event'}</button></div></div>` : taskBar(incident)}
       ${custom?.triggeredAt===null ? '' : `<div class="tabs" role="group" aria-label="Incident details">${tabs.filter(([key])=>!custom || key!=='details').map(([key,label])=>`<button class="tab" data-tab="${key}" aria-pressed="${key===activeTab}">${label}</button>`).join('')}</div>`}
       <div class="case-content" id="case-content">${custom ? simulationCase(incident,activeTab,result) : content[activeTab]()}</div></article>
@@ -688,7 +689,9 @@ function alertCards(incidents = openIncidents()) {
     return `<li class="alert-card ${level}"><div class="row"><div class="buttons"><span class="badge ${level}">${level} · ${levelName(level,Boolean(custom))}</span>${custom?testBadge:''}</div><small class="mono">${incident.id} · ${incident.alert} ET</small></div>
       <h2>${html(incident.title)}</h2><p>${html(incident.service)} · ${custom ? html(incident.type) : incident.affectedPct+'% affected in sample'}</p>
       <div class="references alert-sources" aria-label="Source alerts">${alerts.map(event=>ref(event.id)).join('')}</div>
-      <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button>${custom ? '' : `<button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button>`}</div></div></li>`;
+      <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button>
+      <button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button>
+      ${custom ? '' : `<button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button>`}</div></div></li>`;
   }).join('') || '<li>No alerts match these filters.</li>';
 }
 
@@ -975,7 +978,7 @@ async function showTelegramRouting() {
     if(!dialog.open||!anchor.isConnected)return;
     openDialog('Alert delivery','Telegram routing',`<p><strong>P1 Critical</strong> goes directly to the team group. <strong>P2 High</strong> and <strong>P3 Monitor</strong> go to a private responder first.</p>
       <div class="panel"><div class="row"><h3>Automatic Telegram alerts</h3><span class="badge ${info.auto.enabled?'P2':'neutral'}">${info.auto.enabled?'On':'Off'}</span></div>
-      <p>New alert events use these settings. Opening an incident, adjusting priority, or resetting the demo does not trigger a send.</p>
+      <p>Prepared alerts use these settings when you trigger them from the Desk. Open a custom test event to preview its Telegram message.</p>
       <form class="delivery-form" data-auto-telegram>
         <label for="automatic-responder">Default private responder</label>
         <select id="automatic-responder" name="owner">${info.people.map(person=>`<option value="${html(person.id)}" ${person.id===info.auto.owner?'selected':''}>${html(person.label)}</option>`).join('')||'<option value="">No responder paired</option>'}</select>
@@ -1015,7 +1018,7 @@ function setAutomaticIndicator(enabled) {
   const badge=main.querySelector('[data-auto-telegram-badge]');
   const hint=main.querySelector('[data-auto-telegram-hint]');
   if(badge)badge.textContent='Telegram auto: '+(automaticTelegram?'on':'off');
-  if(hint)hint.textContent=automaticTelegram?'New simulations automatically send to Telegram.':'Simulations stay in the dashboard while Telegram automation is off.';
+  if(hint)hint.textContent=automaticTelegram?'Prepared alerts automatically route to Telegram when triggered.':'Prepared alerts stay in the dashboard while Telegram automation is off.';
 }
 
 function refreshAutomaticIndicator() {
@@ -1113,11 +1116,15 @@ async function openTelegramNotice(incidentId='',recipient='') {
     const info=await deliveryApi('telegram-routing');
     if(!target.isConnected||!dialog.open)return;
     const recipients=info.team||info.people.length;
+    const incidentOptions = items=>items.map(incident=>`<option value="${incident.id}" ${incident.id===incidentId?'selected':''}>
+      ${incidentPriority(incident)} · ${html(incident.title)}</option>`).join('');
+    const tests = Object.values(workspace.custom).filter(incident=>incident.triggeredAt!==null);
     openDialog('Telegram delivery','Send Telegram notification',`
-      <p>Send a one-time message for a prepared incident. This does not open a new route or start an escalation timer.</p>
+      <p>Choose a recipient and preview the message before sending. Custom incidents are labeled as test events and use one-time delivery.</p>
       <form class="delivery-form" data-telegram-notice-form>
-        <label for="notice-incident">Prepared incident</label><select id="notice-incident" name="incident">
-          ${scenarios.map(incident=>`<option value="${incident.id}" ${incident.id===incidentId?'selected':''}>${incidentPriority(incident)} · ${html(incident.title)}</option>`).join('')}
+        <label for="notice-incident">Incident</label><select id="notice-incident" name="incident">
+          <optgroup label="Prepared incidents">${incidentOptions(scenarios)}</optgroup>
+          ${tests.length?`<optgroup label="Custom test events">${incidentOptions(tests)}</optgroup>`:''}
         </select>
         <label for="notice-recipient">Send to</label><select id="notice-recipient" name="recipient" required>
           <option value="" ${recipient?'':'selected'} disabled>Choose the team or a responder</option>
@@ -1133,6 +1140,7 @@ async function openTelegramNotice(incidentId='',recipient='') {
 function showTelegramNotice(notice,recipient) {
   openDialog(notice.incident,'Preview Telegram notification',`
     <p><strong>To ${html(notice.label)}</strong> · ${notice.group?'One post in the group':'Private chat'}</p>
+    ${notice.test?`<p>${testBadge} · This message includes the test description and any recommended actions.</p>`:''}
     <section class="panel"><p class="chat-answer">${html(notice.text)}</p>${notice.group?'<small>The group post includes the responder enrollment button if a link has been created.</small>':''}</section>
     <p data-delivery-status role="status"></p>
     <div class="buttons"><button class="small" data-notify-telegram="${html(notice.incident)}" data-notice-recipient="${html(recipient)}">Back</button>
@@ -1558,7 +1566,8 @@ document.addEventListener('click',event=>{
     void deliveryApi('telegram-notice-send',{token:data.sendNotice,confirm:true}).then(({result})=>{
       if(!target.isConnected||!dialog.open)return;
       const outcome={accepted:'Telegram accepted the notification.',rejected:'Telegram rejected the notification.',unknown:'Telegram did not confirm delivery. Check the chat before sending again.'}[result.status];
-      openDialog(result.incident,'Telegram notification result',`<p>${html(outcome)}</p><p><strong>Recipient:</strong> ${html(result.label)}</p><button class="small" data-notify-telegram="${html(result.incident)}">Preview another notification</button>`);
+      openDialog(result.incident,'Telegram notification result',`<p>${html(outcome)}</p>
+        ${result.detail?`<p>${html(result.detail)}</p>`:''}<p><strong>Recipient:</strong> ${html(result.label)}</p><button class="small" data-notify-telegram="${html(result.incident)}">Preview another notification</button>`);
     },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
   }
   else if (data.routeIncident) void reviewTelegramRoute(data.routeIncident);
@@ -1659,11 +1668,15 @@ document.addEventListener('submit',event=>{
     event.preventDefault();
     const id=form.elements.incident.value;
     const recipient=form.elements.recipient.value;
+    const record=workspace.custom[id];
+    const simulation=record ? {
+      title:record.title,description:record.description,service:record.service,status:record.status,actions:record.actions
+    } : undefined;
     const button=form.querySelector('[type=submit]');
     const target=form.querySelector('[data-delivery-status]');
     button.disabled=true;
     target.textContent='Preparing the Telegram notification…';
-    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(byId(id)),recipient}).then(result=>{
+    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(byId(id)),recipient,simulation}).then(result=>{
       if(target.isConnected&&dialog.open)showTelegramNotice(result,recipient);
     },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
     return;

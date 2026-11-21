@@ -20,7 +20,7 @@ Open **Incident simulator** from the workspace menu. Choose a template to edit i
 
 On the Desk, acknowledge the incident, update its status and severity, and resolve it with a recovery note. The queue and active counts update, and resolved test incidents appear in History. Find upcoming events in the simulator or Calendar. Use **Notifications** for unread activity, notification history, and the sound toggle.
 
-The browser profile stores custom test events. Keep the workspace open to fire a scheduled test on time. An overdue test fires when the workspace next opens. All custom events stay within the browser workspace, including their local assistant responses. Prepared alerts retain their Telegram routing settings. **Reset custom simulations** clears the test events and their notifications after confirmation.
+The browser profile stores custom test events. Keep the workspace open to fire a scheduled test on time. An overdue test fires when the workspace next opens. To send one to Telegram, open the incident, choose **Notify in Telegram**, select the team group or a paired responder, and confirm the preview. Telegram labels it **TEST EVENT** and sends a one-time notification. **Reset custom simulations** clears the local test events and their in-app notifications after confirmation.
 
 Run `node --test test/simulations.test.mjs` to check severity templates, validation, scheduling, the status lifecycle, and evidence handling.
 

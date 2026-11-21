@@ -107,7 +107,7 @@ async function readJson(request) {
   const chunks=[];
   for await (const chunk of request) {
     size+=chunk.length;
-    if (size>8192) return null;
+    if (size>12_000) return null;
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }

@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {readFile,writeFile,rename,rm} from 'node:fs/promises';
-import {scenarios} from './public/data.mjs';
+import {scenarios,services} from './public/data.mjs';
+import {simulationSeverities,simulationStatuses} from './public/simulations.mjs';
 
 const routePath = new URL('./.telegram-routing.local.json',import.meta.url);
 const presentations = {P1:['🚨','CRITICAL'],P2:['🟠','HIGH'],P3:['🔵','MONITOR']};
@@ -27,6 +28,29 @@ export function renderTelegram(incident,level,kind='notice',wait=60) {
     unavailable:'\n\n👥 <b>Team escalation · Private page could not be confirmed</b>\nTap Claim incident to take ownership.',
   }[kind];
   const markup=`${icon} <b>${level} · ${title}</b>\n<b>${escape(incident.title)}</b>\n<code>${escape(incident.id)}</code> · ${escape(incident.service)} · ${incident.alert} ET\n\n📊 <b>Impact</b> · ${incident.affectedPct}% of monitored operations in this sample\n🔎 <b>First check</b>\n${escape(incident.next)}${route}\n\n🧪 Incident Compass · simulated incident`;
+  return {markup,text:plain(markup)};
+}
+
+function renderTestNotice(id,level,input) {
+  if (typeof id!=='string' || !/^SIM-[\dA-F]{8,12}$/.test(id) || !Object.hasOwn(simulationSeverities,level) ||
+      typeof input?.status!=='string' || !Object.hasOwn(simulationStatuses,input.status) ||
+      !services.some(service=>service.name===input.service)) return null;
+  const text = (key,limit) => typeof input[key]==='string' && input[key].trim().length<=limit
+    ? input[key].trim() : null;
+  const title = text('title',100);
+  const description = text('description',1600);
+  const actions = text('actions',1000);
+  if (!title || !description || actions===null) return null;
+  const sections = [
+    '🧪 <b>TEST EVENT · Incident Compass</b>',
+    `<b>${level} · ${simulationSeverities[level]}</b> · ${simulationStatuses[input.status]}`,
+    `<b>${escape(title)}</b>`,
+    `<code>${escape(id)}</code> · ${escape(input.service)}`,
+    '',
+    escape(description),
+    actions ? `\n🔎 <b>Recommended test action</b>\n${escape(actions)}` : '',
+  ];
+  const markup = sections.join('\n').trimEnd();
   return {markup,text:plain(markup)};
 }
 
@@ -126,16 +150,18 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
   async function previewNotice(input) {
     const incident=scenarios.find(record=>record.id===input.incident);
     const level=input.level;
-    if(!incident||typeof level!=='string'||!Object.hasOwn(presentations,level))return {error:'Choose a prepared incident and priority.'};
+    if(typeof level!=='string')return {error:'Choose an incident and severity.'};
+    const message = incident && Object.hasOwn(presentations,level)
+      ? renderTelegram(incident,level) : renderTestNotice(input.incident,level,input.simulation);
+    if(!message)return {error:'Choose a prepared incident or a valid test event and severity.'};
     const [state,config]=await Promise.all([load(),connect()]);
     const target=noticeTarget(state,config,input.recipient);
     if(!config.token||!target)return {error:'Choose the paired team group or a paired private responder.'};
     for(const [id,entry] of notices)if(entry.expires<=now())notices.delete(id);
     if(notices.size>=40)return {error:'Too many notice previews. Try again shortly.'};
     const token=randomUUID();
-    const message=renderTelegram(incident,level);
-    notices.set(token,{recipient:input.recipient,chat:target.chat,bot:botId(config.token),incident:incident.id,level,message,expires:now()+5*60_000});
-    return {token,incident:incident.id,level,text:message.text,label:target.label,destination:masked(target.chat),group:Boolean(target.group)};
+    notices.set(token,{recipient:input.recipient,chat:target.chat,bot:botId(config.token),incident:input.incident,level,message,expires:now()+5*60_000});
+    return {token,incident:input.incident,level,text:message.text,test:!incident,label:target.label,destination:masked(target.chat),group:target.group===true};
   }
   async function sendNotice(input) {
     if(input.confirm!==true)return {error:'Confirm the notification and recipient before sending.'};
@@ -155,7 +181,9 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
       const sent=await call(config.token,'sendMessage',body);
       const accepted=sent.ok&&Number.isInteger(sent.result?.message_id);
       return {incident:notice.incident,level:notice.level,channel:'telegram',destination:masked(target.chat),label:target.label,
-        status:accepted?'accepted':sent.http>=400&&sent.http<500?'rejected':'unknown',time:now()};
+        status:accepted?'accepted':sent.http>=400&&sent.http<500?'rejected':'unknown',
+        detail:sent.http===403 ? (target.group ? 'Check that the bot can still post in the paired group.' : 'Check that the responder has started the bot and hasn’t blocked it.') : undefined,
+        time:now()};
     });
   }
   async function start(input) {
