@@ -20,7 +20,7 @@ Open **Incident simulator** from the workspace menu. Choose a template to edit i
 
 On the Desk, acknowledge the incident, update its status and severity, and resolve it with a recovery note. The queue and active counts update, and resolved test incidents appear in History. Find upcoming events in the simulator or Calendar. Use **Notifications** for unread activity, notification history, and the sound toggle.
 
-The browser profile stores custom test events. Keep the workspace open to fire a scheduled test on time. An overdue test fires when the workspace next opens. To send one to Telegram, open the incident, choose **Notify in Telegram**, select the team group or a paired responder, and confirm the preview. Telegram labels it **TEST EVENT** and sends a one-time notification. **Reset custom simulations** clears the local test events and their in-app notifications after confirmation.
+The browser profile stores custom test events. Keep the workspace open to fire a scheduled test on time. An overdue test fires when the workspace next opens. When Telegram automation is enabled, custom incidents route as soon as they fire. Telegram labels them **TEST EVENT**. **Reset custom simulations** clears the local test events and their in-app notifications after confirmation.
 
 Run `node --test test/simulations.test.mjs` to check severity templates, validation, scheduling, the status lifecycle, and evidence handling.
 
@@ -54,13 +54,13 @@ Under **Alerts → Telegram routing**, pair a team group and optionally add priv
 If the Telegram invite link does not complete pairing, add the bot in Telegram first. Then use **Pair team group → Bot already added? Verify by group ID** to check and save the group directly.
 
 - **P1 Critical:** Post directly in the group. The first team member to tap **Claim incident** becomes the recorded responder.
-- **P2 High / P3 Monitor:** Page the selected private responder. They can tap **Accept** or **Decline**. A reply directly to the page acknowledges it unless it begins with a decline such as “busy,” “no,” or “decline.” Declines and expired response windows post to the group.
+- **Lower severities:** Page the selected private responder. They can tap **Accept** or **Decline** before the deadline shown in Telegram. A direct reply acknowledges the page unless it begins with a decline such as “busy,” “no,” or “decline.” Declines and expired response windows post to the group. **Track Telegram route** shows the live countdown and the latest outcome in the dashboard.
 
 The local server polls Telegram for replies while a route is active and saves routes outside the source bundle. Keep the server running for timely escalation. After a restart it resumes pending routes. If a group message might have been sent during the restart, it asks the operator to check Telegram before retrying. Use a dedicated bot without a webhook or another update poller.
 
-**Automatic Telegram alerts** routes new demo alert events as soon as they are triggered from the Desk. Select a default private responder and timeout in **Alerts → Telegram routing**. Enabling the mode does not send the incidents that are already in the queue. The local alert-event endpoint can accept events from an integration in the same local app; the demo is not connected to a real monitoring service.
+**Automatic Telegram alerts** routes new prepared alerts and custom incidents when they fire. Select a default private responder and timeout in **Alerts → Telegram routing**. Enabling the mode does not send incidents already in the queue. The local alert-event endpoint can accept events from an integration in the same local app; the demo is not connected to a real monitoring service.
 
-For an incident that is already prepared, open **Alerts → Send Telegram notification**. Choose the group or one paired responder, preview the content, and send. This sends one message immediately without starting or modifying an escalation route.
+Open **Alerts → Send Telegram notification** or **Notify in Telegram** on a custom incident. Choose the group for a one-time post, or choose an individual and select **Send and start timer**. A manual private page uses the configured response timeout, or 60 seconds if none is set. Declines and timeouts escalate to the paired group.
 
 Create a **Shared responder link** in the same panel. Once a group member opens it and taps **Start**, the bot verifies their group membership and adds their private chat to the responder list. Team alerts include the link automatically. New teammates join the Telegram group first using a group invitation. Telegram requires each person to start the bot before it can send them a private message. If membership checks cannot see other group members, the group owner may need to make the bot an administrator.
 

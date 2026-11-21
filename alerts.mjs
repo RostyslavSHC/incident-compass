@@ -208,6 +208,7 @@ export function createAlertApi({port,json,request = fetch}) {
     if (path==='/api/alerts/telegram-notice-send') {
       const result=await telegram.sendNotice(input);
       if(result.error)return json(res,409,result);
+      if(result.route)return json(res,202,result);
       deliveries.unshift(result);
       deliveries.length=Math.min(deliveries.length,50);
       return json(res,200,{result});

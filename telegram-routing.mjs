@@ -19,19 +19,35 @@ const responderName=user=>telegramName(user)||'Telegram responder';
 const ownerProfileKey=config=>config.token && privateId(config.owner) ? botId(config.token)+'/'+config.owner : '';
 const currentMember=result=>result.ok&&['creator','administrator','member','restricted'].includes(result.result?.status)&&
   (result.result.status!=='restricted'||result.result.is_member);
+const responseClock = new Intl.DateTimeFormat('en-CA',{
+  timeZone:'America/Toronto',hour:'numeric',minute:'2-digit',second:'2-digit',timeZoneName:'short'
+});
 
-export function renderTelegram(incident,level,kind='notice',wait=60) {
-  const [icon,title]=presentations[level];
-  const route = {
+function routingText(kind,wait,deadline) {
+  const due = deadline ? ` · Reply by ${responseClock.format(deadline)}` : '';
+  return {
     notice:'',
-    private:`\n\n⏳ <b>Respond within ${wait} seconds</b>\nTap Accept or Decline. You can also reply directly to this message.`,
+    private:`\n\n⏳ <b>Respond within ${wait} seconds</b>${due}\nTap Accept or Decline. You can also reply directly to this message.`,
     critical:'\n\n👥 <b>Team page · Immediate routing</b>\nTap Claim incident to take ownership.',
     decline:'\n\n👥 <b>Team escalation · Responder declined</b>\nTap Claim incident to take ownership.',
     timeout:'\n\n👥 <b>Team escalation · No response before the deadline</b>\nTap Claim incident to take ownership.',
     unavailable:'\n\n👥 <b>Team escalation · Private page could not be confirmed</b>\nTap Claim incident to take ownership.',
   }[kind];
+}
+
+export function renderTelegram(incident,level,kind='notice',wait=60,deadline) {
+  const [icon,title]=presentations[level];
+  const route = routingText(kind,wait,deadline);
   const markup=`${icon} <b>${level} · ${title}</b>\n<b>${escape(incident.title)}</b>\n<code>${escape(incident.id)}</code> · ${escape(incident.service)} · ${incident.alert} ET\n\n📊 <b>Impact</b> · ${incident.affectedPct}% of monitored operations in this sample\n🔎 <b>First check</b>\n${escape(incident.next)}${route}\n\n🧪 Incident Compass · simulated incident`;
   return {markup,text:plain(markup)};
+}
+
+function renderRoute(route,kind,deadline) {
+  if (route.testMarkup) {
+    const markup = route.testMarkup + routingText(kind,route.wait,deadline);
+    return {markup,text:plain(markup)};
+  }
+  return renderTelegram(scenarios.find(item=>item.id===route.incident),route.level,kind,route.wait,deadline);
 }
 
 function renderTestNotice(id,level,input) {
@@ -72,7 +88,7 @@ async function save(state) {
 
 function summarize(entry) {
   const {id,incident,level,stage,created,deadline,reason,acceptedBy,notice}=entry;
-  return {id,incident,level,stage,created,deadline,reason,acceptedBy,notice};
+  return {id,incident,level,stage,created,deadline,reason,acceptedBy,notice,test:Boolean(entry.testMarkup),owner:entry.owner?.label,team:entry.team?.label};
 }
 
 export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now}) {
@@ -190,11 +206,17 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     if(input.recipient==='default') await resolveOwnerProfile(state,config);
     const target=noticeTarget(state,config,input.recipient);
     if(!config.token||!target)return {error:'Choose the paired team group or a paired private responder.'};
+    const {team,auto}=targets(state,config);
+    const group = target.group===true;
+    if(!group&&!team)return {error:'Pair a team group so the bot can escalate a declined or unanswered private page.'};
+    const wait = secondsAllowed.has(auto.wait) ? auto.wait : 60;
     for(const [id,entry] of notices)if(entry.expires<=now())notices.delete(id);
     if(notices.size>=40)return {error:'Too many notice previews. Try again shortly.'};
     const token=randomUUID();
-    notices.set(token,{recipient:input.recipient,chat:target.chat,bot:botId(config.token),incident:input.incident,level,message,expires:now()+5*60_000});
-    return {token,incident:input.incident,level,text:message.text,test:!incident,label:target.label,destination:masked(target.chat),group:target.group===true};
+    const route = {incident:input.incident,level,wait,testMarkup:incident?undefined:message.markup};
+    notices.set(token,{...route,recipient:input.recipient,chat:target.chat,team,bot:botId(config.token),message,expires:now()+5*60_000});
+    return {token,incident:input.incident,level,text:group?message.text:renderRoute(route,'private').text,test:!incident,
+      label:target.label,destination:masked(target.chat),group,wait:group?undefined:wait,team:group?undefined:team.label};
   }
   async function sendNotice(input) {
     if(input.confirm!==true)return {error:'Confirm the notification and recipient before sending.'};
@@ -204,9 +226,20 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
       const [state,config]=await Promise.all([load(),connect()]);
       const target=noticeTarget(state,config,notice.recipient);
       if(!target||target.chat!==notice.chat||botId(config.token)!==notice.bot)return {error:'The recipient changed. Review a new preview.'};
-      if(typeof target.group==='string'){
-        const member=await call(config.token,'getChatMember',{chat_id:target.group,user_id:Number(target.chat)});
-        if(!currentMember(member))return {error:'This responder could not be verified as a current group member.'};
+      if(target.group!==true){
+        const {team}=targets(state,config);
+        if(!team||team.chat!==notice.team?.chat)return {error:'The team group changed. Review a new preview.'};
+        const active=state.routes.find(route=>route.bot===notice.bot&&route.incident===notice.incident&&liveStages.has(route.stage));
+        if(active){
+          if(active.owner?.chat!==target.chat||active.reason==='critical')return {error:'This incident already has an active Telegram route. Open it in Telegram routing to see who is handling it.'};
+          notices.delete(input.token);
+          return {route:summarize(active),existing:true};
+        }
+        const hook=await call(config.token,'getWebhookInfo');
+        if(!hook.ok||hook.result?.url)return {error:'Telegram replies require a reachable bot without an active webhook.'};
+        const route=await queueRoute(state,{...notice,owner:target,team,direct:false});
+        notices.delete(input.token);
+        return {route:summarize(route)};
       }
       notices.delete(input.token);
       const body={chat_id:target.chat,text:notice.message.markup,parse_mode:'HTML',link_preview_options:{is_disabled:true}};
@@ -238,8 +271,10 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     });
   }
   async function queueRoute(state,entry) {
+    const direct = entry.direct ?? entry.level==='P1';
     const route={id:randomUUID(),bot:entry.bot,incident:entry.incident,level:entry.level,wait:entry.wait,
-      owner:entry.owner,team:entry.team,created:now(),event:entry.event,stage:entry.level==='P1'?'queued-team':'queued-private',reason:entry.level==='P1'?'critical':null};
+      testMarkup:entry.testMarkup,owner:entry.owner,team:entry.team,created:now(),event:entry.event,
+      stage:direct?'queued-team':'queued-private',reason:direct?'critical':null};
     state.routes.unshift(route);
     state.routes=[...state.routes.filter(item=>liveStages.has(item.stage)),...state.routes.filter(item=>!liveStages.has(item.stage)).slice(0,45)].sort((a,b)=>b.created-a.created);
     await save(state);
@@ -272,18 +307,22 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     return exclusive(async()=>{
       const incident=typeof input.incident==='string'&&scenarios.find(record=>record.id===input.incident);
       const level=input.level;
-      if(!incident||typeof level!=='string'||!Object.hasOwn(presentations,level)||!/^[a-zA-Z0-9_-]{12,100}$/.test(typeof input.event==='string'?input.event:'')){
+      const test = !incident&&typeof level==='string' ? renderTestNotice(input.incident,level,input.simulation) : null;
+      if(!(test||(incident&&typeof level==='string'&&Object.hasOwn(presentations,level))) ||
+         !/^[a-zA-Z0-9_-]{12,100}$/.test(typeof input.event==='string'?input.event:'')){
         return {error:'Invalid alert event.'};
       }
       const config=await connect();
       const state=await load();
       const id=botId(config.token);
       const {team,people,auto}=targets(state,config);
+      const active=state.routes.find(route=>route.bot===id&&(route.event===input.event||(route.incident===input.incident&&liveStages.has(route.stage))));
+      if(active)return {status:'duplicate',route:summarize(active)};
       if(!auto.enabled)return {status:'disabled'};
-      const owner=people.find(person=>person.id===auto.owner);
+      if(auto.owner==='default') await resolveOwnerProfile(state,config);
+      const owner=(auto.owner==='default'?targets(state,config).people:people).find(person=>person.id===auto.owner);
       if(!config.token||!team||(level!=='P1'&&!owner))return {error:'Automatic Telegram delivery needs its group and responder configured.'};
-      if(state.routes.some(route=>route.bot===id&&(route.event===input.event||(route.incident===incident.id&&liveStages.has(route.stage)))))return {status:'duplicate'};
-      const route=await queueRoute(state,{bot:id,incident:incident.id,level,wait:auto.wait,owner,team,event:input.event});
+      const route=await queueRoute(state,{bot:id,incident:input.incident,level,wait:auto.wait,owner,team,event:input.event,testMarkup:test?.markup});
       return {status:'queued',route:summarize(route)};
     });
   }
@@ -350,15 +389,16 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
       (!callback||message.message_id===route.privateMessage);
     const inTeam=id===route.team.chat&&route.stage==='open-team'&&message?.message_id===route.teamMessage&&action==='claim'&&user?.id&&!user.is_bot;
     const reply=String(message?.text||message?.caption||'').trim();
-    const decline=inPrivate&&(action==='decline'||(!callback&&/^(decline|reject|busy|no|unavailable)\b/i.test(reply)));
-    const accept=inTeam||(inPrivate&&(action==='accept'||(!callback&&reply&&!decline)));
+    const responseTime = !callback && Number.isInteger(message?.date) ? message.date*1000 : now();
+    const withinWindow = inPrivate && responseTime<route.deadline;
+    const decline=withinWindow&&(action==='decline'||(!callback&&/^(decline|reject|busy|no|unavailable)\b/i.test(reply)));
+    const accept=inTeam||(withinWindow&&(action==='accept'||(!callback&&reply&&!decline)));
     if(decline){route.stage='queued-team';route.reason='decline';}
     if(accept){route.stage='accepted';route.acceptedBy=responderName(user);}
     if(decline||accept)await save(state);
     if(callback?.id)await call(token,'answerCallbackQuery',{callback_query_id:callback.id,text:accept?'Ownership recorded.':decline?'Escalating to the team.':'This page is no longer available to claim.'});
     if(decline||accept) {
-      const incident=scenarios.find(item=>item.id===route.incident);
-      const previous=renderTelegram(incident,route.level,inTeam?route.reason:'private',route.wait).markup;
+      const previous=renderRoute(route,inTeam?route.reason:'private',route.deadline).markup;
       const status=accept?`✅ <b>Accepted by ${escape(route.acceptedBy)}</b>`:'↪ <b>Declined · Escalating to the team</b>';
       await call(token,'editMessageText',{chat_id:id,message_id:callback?message.message_id:route.privateMessage,text:previous+'\n\n'+status,parse_mode:'HTML',reply_markup:{inline_keyboard:inTeam?teamButtons(state,route,false):[]}});
     }
@@ -372,10 +412,9 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
         return;
       }
     }
-    const incident=scenarios.find(item=>item.id===route.incident);
-    const message=renderTelegram(incident,route.level,toTeam?route.reason:'private',route.wait);
     route.stage=toTeam?'sending-team':'sending-private';
     if (!toTeam) route.deadline=now()+route.wait*1000;
+    const message=renderRoute(route,toTeam?route.reason:'private',toTeam?undefined:route.deadline);
     await save(state);
     const data=(name)=>`ic:${route.id}:${name}`;
     const result=await call(token,'sendMessage',{
@@ -386,7 +425,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     });
     if(result.ok&&Number.isInteger(result.result?.message_id)){
       if(toTeam){route.teamMessage=result.result.message_id;route.stage='open-team';}
-      else {route.privateMessage=result.result.message_id;route.stage='waiting';route.deadline=now()+route.wait*1000;}
+      else {route.privateMessage=result.result.message_id;route.stage='waiting';}
     }else if(toTeam){
       route.stage='failed';
       route.notice='Telegram did not confirm the group post. Check the group before starting a new route.';
@@ -423,7 +462,9 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
         if(route.stage==='sending-private'&&route.deadline<=now()){route.stage='queued-team';route.reason='unavailable';}
         if(route.stage==='waiting'&&route.deadline<=now()){
           route.stage='queued-team';route.reason='timeout';await save(state);
-          await call(config.token,'editMessageReplyMarkup',{chat_id:route.owner.chat,message_id:route.privateMessage,reply_markup:{inline_keyboard:[]}});
+          await call(config.token,'editMessageText',{chat_id:route.owner.chat,message_id:route.privateMessage,
+            text:renderRoute(route,'private',route.deadline).markup+'\n\n⏱ <b>Response window expired · Escalated to the team</b>',
+            parse_mode:'HTML',reply_markup:{inline_keyboard:[]}});
         }
         if(route.stage==='queued-private'){await send(state,route,config.token,false);await save(state);}
         if(route.stage==='queued-team'){await send(state,route,config.token,true);await save(state);}

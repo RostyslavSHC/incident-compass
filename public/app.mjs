@@ -72,6 +72,7 @@ let revealObserver;
 let simulatorDraft = {};
 let notificationHistory = false;
 let automaticTelegram = false;
+let telegramOutboxBusy = false;
 let deliveryState;
 let deliveryPreview;
 const channelSetup = {
@@ -271,6 +272,10 @@ function tick() {
   const timer = document.querySelector('[data-countdown]');
   const task = latest.tasks[selected];
   if (timer && task?.status === 'pending') timer.textContent = Math.max(0, Math.ceil((task.until - Date.now()) / 1000)) + 's';
+  const telegramTimer = dialog.querySelector('[data-telegram-deadline]');
+  if (telegramTimer) telegramTimer.textContent = remainingSeconds(Number(telegramTimer.dataset.telegramDeadline))+'s';
+  const pending = Object.values(latest.custom).find(incident=>incident.telegram?.status==='pending' && incident.telegram.nextAt<=now);
+  if (pending && !telegramOutboxBusy) void deliverSimulation(pending);
 }
 
 function actionOnTask(action, id) {
@@ -425,6 +430,9 @@ function earliestLocalTrigger() {
 
 function publishSimulation(state,record,now) {
   if (!releaseSimulation(record,now)) return;
+  if (location.protocol.startsWith('http')) {
+    record.telegram = {status:'pending',nextAt:now,attempts:0,level:record.level,simulation:simulationPayload(record)};
+  }
   if (record.status !== 'resolved') state.active.push(record.id);
   notification(state,record.id,record.title,`Simulation fired · ${record.service} · ${testStatus(record)}`);
 }
@@ -442,7 +450,7 @@ function simulator() {
     <button class="small primary" data-fire-template="${index}" aria-label="Run ${html(item.title)}">Run now</button></div></li>`).join('');
   return layout('Incident simulator.','Create a test incident and walk it through the same desk, alert inbox, and archive.',`
     <section class="simulation-banner row"><div><span class="badge test-badge">Demo mode</span>
-    <p>Simulator events alert this dashboard immediately. Open a test event to review and send it to Telegram.</p></div>
+    <p data-simulation-telegram-hint>${simulationTelegramHint()}</p></div>
     <div class="buttons"><button class="small" data-run-burst>Run all four severities</button>
     <button class="small danger" data-reset-custom ${count?'':'disabled'}>Reset custom simulations</button></div></section>
     <section class="template-section" aria-labelledby="template-title"><h2 id="template-title">Demo scenarios</h2>
@@ -488,6 +496,7 @@ function previewSimulation(values) {
       <div><dt>Incident timestamp</dt><dd>${time===null?'At creation':html(formatIncidentTime(time))}</dd></div>
       <div><dt>Trigger</dt><dd>${input.scheduledAt===null?'Immediately':html(formatIncidentTime(input.scheduledAt))}</dd></div>
     </dl>${input.actions ? `<p class="chat-answer"><strong>Recommended actions</strong><br>${html(input.actions)}</p>` : ''}
+    ${automaticTelegram?`<p class="small">Telegram will ${input.level==='P1'?'post this test directly to the group':'page the default responder when this test fires'}.</p>`:''}
     <div class="buttons"><button class="small" data-close>Back to editing</button>
       <button class="small primary" data-confirm-simulation>${input.scheduledAt===null?'Create incident':'Schedule incident'}</button></div>`);
 }
@@ -610,7 +619,7 @@ function desk() {
       ${custom ? `<div class="handoff"><div class="buttons">
         ${custom.triggeredAt!==null ? `${custom.status==='reported'?'<button class="small primary" data-test-status="acknowledged">Acknowledge</button>':''}
         <button class="small" data-test-status="update">Update incident</button>${custom.status!=='resolved'?'<button class="small" data-test-status="resolved">Resolve</button>':''}
-        <button class="small" data-notify-telegram="${custom.id}">Notify in Telegram</button>` : ''}
+        <button class="small" data-notify-telegram="${custom.id}">Notify in Telegram</button>${simulationTelegramStatus(custom)}` : ''}
         <button class="small danger" data-delete-custom="${custom.id}">${custom.triggeredAt===null?'Cancel schedule':'Delete test event'}</button></div></div>` : taskBar(incident)}
       ${custom?.triggeredAt===null ? '' : `<div class="tabs" role="group" aria-label="Incident details">${tabs.filter(([key])=>!custom || key!=='details').map(([key,label])=>`<button class="tab" data-tab="${key}" aria-pressed="${key===activeTab}">${label}</button>`).join('')}</div>`}
       <div class="case-content" id="case-content">${custom ? simulationCase(incident,activeTab,result) : content[activeTab]()}</div></article>
@@ -935,12 +944,12 @@ async function toggleSound(button) {
   }
 }
 
-async function deliveryApi(action,payload) {
+async function deliveryApi(action,payload,signal) {
   if (!location.protocol.startsWith('http')) throw Error('Start the local server to configure or preview external delivery.');
   const options=payload ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)} : {};
-  const response=await fetch('/api/alerts/'+action,options);
+  const response=await fetch('/api/alerts/'+action,{...options,signal});
   const data=await response.json();
-  if (!response.ok) throw Error(data.error || 'Delivery service unavailable.');
+  if (!response.ok) throw Object.assign(Error(data.error || 'Delivery service unavailable.'),{status:response.status});
   return data;
 }
 
@@ -983,10 +992,13 @@ const routeLabels = {
   'queued-team':'Team post queued','sending-team':'Posting to team group','open-team':'Posted to team · Awaiting claim',
   accepted:'Accepted',failed:'Delivery needs review'
 };
+const remainingSeconds = deadline=>Math.max(0,Math.ceil((deadline-Date.now())/1000));
+
 function routeDetails(route) {
-  const deadline=route.stage==='waiting'&&route.deadline ? `<p>Reply by <strong>${html(new Date(route.deadline).toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'2-digit',minute:'2-digit',second:'2-digit'}))} ET</strong></p>` : '';
+  const deadline=route.stage==='waiting'&&route.deadline ? `<p>Reply by <strong>${html(new Date(route.deadline).toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'2-digit',minute:'2-digit',second:'2-digit'}))} ET</strong> · <strong class="mono" role="timer" aria-live="off" data-telegram-deadline="${route.deadline}">${remainingSeconds(route.deadline)}s</strong> remaining</p>` : '';
   const reason={critical:'Sent directly to the group because this alert is P1 Critical.',decline:'The private responder declined.',timeout:'The private response window expired.',unavailable:'Telegram did not confirm the private page.'}[route.reason];
-  return `<p><strong>${html(routeLabels[route.stage])}</strong>${route.acceptedBy?' · '+html(route.acceptedBy):''}</p>${deadline}
+  return `<p><strong>${html(routeLabels[route.stage])}</strong>${route.acceptedBy?' · '+html(route.acceptedBy):''} ${route.test?testBadge:''}</p>
+    ${route.owner&&!route.acceptedBy&&['queued-private','sending-private','waiting'].includes(route.stage)?`<p>Responder: ${html(route.owner)}</p>`:''}${deadline}
     ${reason?`<p>${html(reason)}</p>`:''}${route.notice?`<p>${html(route.notice)}</p>`:''}`;
 }
 
@@ -998,9 +1010,9 @@ async function showTelegramRouting() {
     setAutomaticIndicator(info.auto.enabled);
     syncTelegramResponders(info.people);
     if(!dialog.open||!anchor.isConnected)return;
-    openDialog('Alert delivery','Telegram routing',`<p><strong>P1 Critical</strong> goes directly to the team group. <strong>P2 High</strong> and <strong>P3 Monitor</strong> go to a private responder first.</p>
+    openDialog('Alert delivery','Telegram routing',`<p><strong>P1 Critical</strong> goes directly to the team group. Lower severities page the default responder and escalate to the group if declined or unanswered.</p>
       <div class="panel"><div class="row"><h3>Automatic Telegram alerts</h3><span class="badge ${info.auto.enabled?'P2':'neutral'}">${info.auto.enabled?'On':'Off'}</span></div>
-      <p>Prepared alerts use these settings when you trigger them from the Desk. Open a custom test event to preview its Telegram message.</p>
+      <p>Prepared alerts and custom incidents use these settings when they fire. Scheduled incidents route when the dashboard releases them.</p>
       <form class="delivery-form" data-auto-telegram>
         <label for="automatic-responder">Default private responder</label>
         <select id="automatic-responder" name="owner">${info.people.map(person=>`<option value="${html(person.id)}" ${person.id===info.auto.owner?'selected':''}>${html(person.label)}</option>`).join('')||'<option value="">No responder paired</option>'}</select>
@@ -1039,8 +1051,57 @@ function setAutomaticIndicator(enabled) {
   automaticTelegram=enabled===true;
   const badge=main.querySelector('[data-auto-telegram-badge]');
   const hint=main.querySelector('[data-auto-telegram-hint]');
+  const simulationHint=main.querySelector('[data-simulation-telegram-hint]');
   if(badge)badge.textContent='Telegram auto: '+(automaticTelegram?'on':'off');
   if(hint)hint.textContent=automaticTelegram?'Prepared alerts automatically route to Telegram when triggered.':'Prepared alerts stay in the dashboard while Telegram automation is off.';
+  if(simulationHint)simulationHint.textContent=simulationTelegramHint();
+}
+
+function simulationTelegramHint() {
+  return automaticTelegram
+    ? 'Automatic Telegram is on. Triggering a test event shares its description and recommended actions with the configured responder or group.'
+    : 'Test events appear in the dashboard. Enable automatic Telegram routing in Alerts to page the team when they fire.';
+}
+
+function simulationPayload(record) {
+  const {title,description,service,status,actions}=record;
+  return {title,description,service,status,actions};
+}
+
+function simulationTelegramStatus(record) {
+  const delivery=record.telegram;
+  if(!delivery) return '';
+  if(delivery.route) return `<button class="small" data-route-status="${html(delivery.route)}">Track Telegram route</button>`;
+  if(delivery.status==='failed') return `<small role="status">Telegram: ${html(delivery.error)}</small>`;
+  return `<small role="status">${delivery.status==='pending'?'Queuing Telegram route…':'Telegram automation is off'}</small>`;
+}
+
+async function deliverSimulation(record) {
+  telegramOutboxBusy=true;
+  const {attempts,level,simulation}=record.telegram;
+  let result;
+  let failure;
+  try {
+    result=await deliveryApi('telegram-alert-event',{
+      event:'simulation-'+record.id,incident:record.id,level,simulation
+    },AbortSignal.timeout(15_000));
+  }catch(error){failure=error;}
+  try {
+    await update(state=>{
+      const current=state.custom[record.id];
+      if(current?.telegram?.status!=='pending')return;
+      if(result){
+        current.telegram={status:result.status,route:result.route?.id};
+        return;
+      }
+      if((!failure.status||failure.status>=500)&&attempts<2){
+        current.telegram={...current.telegram,attempts:attempts+1,nextAt:Date.now()+5000*(attempts+1)};
+        return;
+      }
+      current.telegram={status:'failed',error:failure.message};
+      return 'Telegram could not queue '+record.title+'.';
+    });
+  }finally{telegramOutboxBusy=false;}
 }
 
 function refreshAutomaticIndicator() {
@@ -1145,7 +1206,7 @@ async function openTelegramNotice(incidentId='',recipient='') {
       ${incidentPriority(incident)} · ${html(incident.title)}</option>`).join('');
     const tests = Object.values(workspace.custom).filter(incident=>incident.triggeredAt!==null);
     openDialog('Telegram delivery','Send Telegram notification',`
-      <p>Choose a recipient and preview the message before sending. Custom incidents are labeled as test events and use one-time delivery.</p>
+      <p>Choose the team group for one post, or choose a private responder to request acknowledgement with a deadline. Custom incidents are labeled as test events.</p>
       <form class="delivery-form" data-telegram-notice-form>
         <label for="notice-incident">Incident</label><select id="notice-incident" name="incident">
           <optgroup label="Prepared incidents">${incidentOptions(scenarios)}</optgroup>
@@ -1166,10 +1227,11 @@ function showTelegramNotice(notice,recipient) {
   openDialog(notice.incident,'Preview Telegram notification',`
     <p><strong>To ${html(notice.label)}</strong> · ${notice.group?'One post in the group':'Private chat'}</p>
     ${notice.test?`<p>${testBadge} · This message includes the test description and any recommended actions.</p>`:''}
+    ${notice.wait?`<p>The responder has <strong>${notice.wait} seconds</strong> to reply. A decline or timeout escalates to <strong>${html(notice.team)}</strong>.</p>`:''}
     <section class="panel"><p class="chat-answer">${html(notice.text)}</p>${notice.group?'<small>The group post includes the responder enrollment button if a link has been created.</small>':''}</section>
     <p data-delivery-status role="status"></p>
     <div class="buttons"><button class="small" data-notify-telegram="${html(notice.incident)}" data-notice-recipient="${html(recipient)}">Back</button>
-    <button class="small primary" data-send-notice="${html(notice.token)}">Send notification</button></div>`);
+    <button class="small primary" data-send-notice="${html(notice.token)}">${notice.wait?'Send and start timer':'Send notification'}</button></div>`);
 }
 
 function previewTelegramRoute(incident,preview) {
@@ -1183,14 +1245,18 @@ function previewTelegramRoute(incident,preview) {
 async function trackTelegramRoute(id,initial) {
   openDialog('Telegram routing','Track Telegram route',`<div data-route-tracking role="status">${initial?routeDetails(initial):'Checking route…'}</div><button class="small" data-telegram-routing>All routes</button>`);
   const slot=dialog.querySelector('[data-route-tracking]');
+  let lastRoute=JSON.stringify(initial);
   try {
     while(dialog.open&&slot.isConnected){
       const state=await deliveryApi('telegram-routing');
       if(!slot.isConnected)return;
       const route=state.routes.find(item=>item.id===id);
       if(!route){slot.textContent='This route is no longer in the recent list.';return;}
-      const detail=routeDetails(route);
-      if(slot.innerHTML!==detail)slot.innerHTML=detail;
+      const snapshot=JSON.stringify(route);
+      if(lastRoute!==snapshot){
+        slot.innerHTML=routeDetails(route);
+        lastRoute=snapshot;
+      }
       if(['accepted','failed'].includes(route.stage))return;
       await new Promise(resolve=>setTimeout(resolve,3000));
     }
@@ -1594,8 +1660,9 @@ document.addEventListener('click',event=>{
     button.disabled=true;
     const target=dialog.querySelector('[data-delivery-status]');
     target.textContent='Submitting the notification to Telegram…';
-    void deliveryApi('telegram-notice-send',{token:data.sendNotice,confirm:true}).then(({result})=>{
+    void deliveryApi('telegram-notice-send',{token:data.sendNotice,confirm:true}).then(({result,route})=>{
       if(!target.isConnected||!dialog.open)return;
+      if(route){void trackTelegramRoute(route.id,route);return;}
       const outcome={accepted:'Telegram accepted the notification.',rejected:'Telegram rejected the notification.',unknown:'Telegram did not confirm delivery. Check the chat before sending again.'}[result.status];
       openDialog(result.incident,'Telegram notification result',`<p>${html(outcome)}</p>
         ${result.detail?`<p>${html(result.detail)}</p>`:''}<p><strong>Recipient:</strong> ${html(result.label)}</p><button class="small" data-notify-telegram="${html(result.incident)}">Preview another notification</button>`);
@@ -1700,9 +1767,7 @@ document.addEventListener('submit',event=>{
     const id=form.elements.incident.value;
     const recipient=form.elements.recipient.value;
     const record=workspace.custom[id];
-    const simulation=record ? {
-      title:record.title,description:record.description,service:record.service,status:record.status,actions:record.actions
-    } : undefined;
+    const simulation=record ? simulationPayload(record) : undefined;
     const button=form.querySelector('[type=submit]');
     const target=form.querySelector('[data-delivery-status]');
     button.disabled=true;
