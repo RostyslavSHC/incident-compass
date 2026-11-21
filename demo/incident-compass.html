@@ -1,0 +1,1626 @@
+<!doctype html>
+<html lang="en-CA">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A cloud incident desk for investigating alerts, reviewing evidence and handing urgent work to an available engineer.">
+  <title>Incident Compass | On-call desk</title>
+  <style>
+:root {
+  color-scheme: light;
+  --paper:#efede1; --sheet:#f6f3e8; --ink:#191a14; --quiet:#5d5b4e; --rule:#a6a390;
+  --acid:#e5f440; --red:#a82c1d; --pale-red:#f5dbd0; --green:#3f561b;
+  --mono:"IBM Plex Mono", Consolas, monospace;
+  --body:"Inter", "Segoe UI", sans-serif;
+  --display:"Georgia", "Times New Roman", serif;
+}
+* {box-sizing:border-box}
+body {margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 var(--body)}
+body::before {content:"";position:fixed;inset:0;pointer-events:none;z-index:-1;opacity:.23;background:radial-gradient(#96947b 0.45px, transparent .55px) 0 0/5px 5px}
+.frame {width:min(100% - 68px, 1440px);margin:auto}
+button,input,select {font:inherit;color:inherit}
+button,select {cursor:pointer}
+a {color:inherit}
+button {background:var(--sheet);border:1px solid var(--ink);padding:.5rem .75rem;font-weight:650}
+button:hover {background:var(--acid)}
+button:active {transform:translate(1px,1px)}
+button:disabled {cursor:default;opacity:.65;transform:none}
+input,select {background:var(--sheet);border:1px solid var(--ink);padding:.48rem .65rem;min-width:0}
+select {appearance:none;padding-right:1.75rem;background:linear-gradient(45deg,transparent 50%,currentColor 50%) calc(100% - 12px) 53%/5px 5px no-repeat,linear-gradient(135deg,currentColor 50%,transparent 50%) calc(100% - 7px) 53%/5px 5px no-repeat,var(--sheet)}
+:focus-visible {outline:3px solid var(--red);outline-offset:3px}
+button.primary {background:var(--acid);color:#191a14;box-shadow:3px 3px #191a14}
+button.primary:hover {background:#f6ff90}
+button.danger {color:var(--red)}
+.small {font-size:.875rem}
+.mono,.kicker,.badge,footer,.stat small,.case-meta,.tab {font-family:var(--mono)}
+.kicker {font-size:.8125rem;letter-spacing:.085em;font-weight:700;text-transform:uppercase}
+.quiet, small {color:var(--quiet)}
+small {font-size:.84rem}
+.skip,.sr-only {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.skip:focus {clip-path:none;width:auto;height:auto;z-index:10;background:var(--acid);padding:10px}
+[hidden] {display:none!important}
+.top {min-height:69px;border-bottom:1px solid var(--ink);display:flex;align-items:center;justify-content:space-between;gap:22px;flex-wrap:wrap;padding:10px 0}
+.brand {white-space:nowrap;font-size:1.12rem;font-weight:800;letter-spacing:-.04em;text-decoration:none;display:flex;align-items:center;gap:.5rem}
+.brand-mark {display:grid;place-items:center;width:29px;height:29px;background:var(--acid);border:1px solid #191a14;color:#191a14;font-size:19px;line-height:1}
+.top nav,.top-right {display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.top nav a {padding:.34rem .7rem;font-size:.9rem;font-weight:650;text-decoration:none;white-space:nowrap}
+.top nav a:hover {text-decoration:underline}
+.top nav a[aria-current] {background:var(--ink);color:var(--paper)}
+.top-right select {font-size:.875rem}
+#chat-count {display:inline-grid;place-items:center;background:var(--red);color:white;min-width:19px;border-radius:50%;font-size:12px}
+.hero {border-bottom:2px solid var(--ink);display:grid;grid-template-columns:1fr 235px;align-items:center;gap:32px;padding:28px 0 24px;position:relative}
+.hero h1 {font:normal clamp(3.8rem,8.4vw,8.1rem)/.9 var(--display);letter-spacing:-.085em;margin:12px 0 15px}
+.hero h1 em {font-weight:normal}
+.hero p {margin:.35rem 0 0;color:var(--quiet)}
+.radar {width:220px;height:145px;position:relative;overflow:hidden;border:1px solid var(--ink);background:radial-gradient(circle,var(--ink) .7px,transparent 1px) 0 0/6px 6px,var(--acid);justify-self:end}
+.radar::after {content:"";position:absolute;width:165px;height:165px;border-radius:50%;background:conic-gradient(from 20deg,transparent 70%,#191a143d);left:27px;top:-10px;animation:sweep 11s linear infinite}
+.radar i {position:absolute;top:50%;left:50%;width:var(--size);height:var(--size);border:1px solid #191a1470;border-radius:50%;transform:translate(-50%,-50%)}
+.radar b {position:absolute;z-index:1;width:8px;height:8px;border:1px solid #191a14;background:#a82c1d;border-radius:50%;left:var(--x);top:var(--y);box-shadow:0 0 0 4px #a82c1d35}
+.radar span {position:absolute;z-index:2;bottom:0;right:0;padding:2px 5px;background:#191a14;color:#efede1;font-size:.75rem}
+@keyframes sweep {to {transform:rotate(1turn)}}
+.stats {display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--ink);margin-bottom:28px}
+.stat {padding:13px 17px 15px;border-right:1px solid var(--rule)}
+.stat:first-child {padding-left:0}
+.stat:last-child {border:0}
+.stat strong {font:normal 2.2rem/1.05 var(--display);letter-spacing:-.06em;display:block}
+.stat small {display:block;font-weight:650;margin-top:4px}
+.desk {display:grid;grid-template-columns:minmax(245px, .8fr) minmax(0, 2fr);gap:27px;align-items:start}
+.queue {min-width:0}
+.section-top,.case-top,.row,.simulate-head {display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.section-top h2,.case h2,.page h2 {margin:0}
+.section-top {border-bottom:1px solid var(--ink);padding-bottom:10px;margin-bottom:11px}
+.section-top h2,.page h2 {font:normal 2.05rem/1.05 var(--display);letter-spacing:-.045em}
+.queue-item {display:block;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--rule);padding:12px 10px;margin:0;min-height:89px}
+.queue-item[aria-pressed=true] {background:var(--sheet);box-shadow:inset 4px 0 var(--ink);border:1px solid var(--ink);padding-left:15px}
+.queue-item:hover {background:var(--sheet)}
+.queue-item strong {display:block;font-size:1rem;margin:.26rem 0}
+.badge {display:inline-flex;align-items:center;gap:.3rem;padding:1px 6px;font-weight:700;font-size:.8125rem;border:1px solid currentColor;white-space:nowrap;line-height:1.5}
+.P1 {color:var(--red);background:var(--pale-red)}
+.P2 {color:#191a14;background:#e6f15d}
+.P3,.neutral {color:var(--quiet);background:var(--sheet)}
+.simulate {margin-top:17px;padding:11px;border:1px dashed var(--rule)}
+.simulate .buttons {margin-top:8px;display:flex;flex-wrap:wrap;gap:6px}
+.case {background:var(--sheet);border:1px solid var(--ink);min-width:0}
+.case-head {padding:19px 20px 13px}
+.case-meta {color:var(--quiet);font-size:.8125rem}
+.case h2 {font:normal clamp(1.75rem,4vw,3.25rem)/1.02 var(--display);letter-spacing:-.055em;margin:9px 0 3px}
+.case-head p {margin:.3rem 0}
+.case-top .actions,.buttons {display:flex;gap:8px;flex-wrap:wrap}
+.handoff {border-block:1px solid var(--rule);padding:10px 20px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;background:#a6a3901a}
+.handoff .buttons button {padding:.36rem .65rem}
+.tabs {display:flex;border-bottom:1px solid var(--ink);overflow:auto}
+.tab {border:0;border-right:1px solid var(--rule);padding:.75rem .9rem;background:transparent;font-size:.875rem;white-space:nowrap}
+.tab[aria-pressed=true] {background:var(--ink);color:var(--paper)}
+.case-content {padding:18px 20px 22px}
+.case-content h3,.panel h3 {margin:.1rem 0 .4rem;font-size:1.06rem}
+.case-content p,.panel p {margin:.25rem 0 .6rem}
+.lead {margin:0 0 13px;padding:13px 14px;border-left:4px solid var(--ink);background:var(--acid);color:#191a14}
+.lead p {margin:.3rem 0}
+.duo {display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.panel {border:1px solid var(--rule);padding:12px;min-width:0}
+.panel + .panel.block,.block {margin-top:11px}
+.dissent {background:var(--pale-red);border-color:var(--red);color:var(--red)}
+.references {display:flex;gap:6px;flex-wrap:wrap}
+.ref {font:.8rem var(--mono);padding:3px 6px;background:transparent}
+.lead .ref,.dissent .ref {background:var(--sheet);color:var(--ink)}
+details summary {cursor:pointer;font-weight:650}
+details p:last-child {margin-bottom:0}
+.trace,.timeline,.archive,.channel {list-style:none;padding:0;margin:0}
+.trace li,.timeline li,.archive li,.channel li {padding:10px 0;border-bottom:1px solid var(--rule)}
+.trace li:last-child,.timeline li:last-child,.archive li:last-child {border-bottom:0}
+.trace .mono,.timeline .mono {font-size:.875rem}
+.range {display:block;width:100%;accent-color:var(--red);padding:0;cursor:ew-resize}
+.page {padding:24px 0;min-height:55vh}
+.page-hero {display:flex;justify-content:space-between;align-items:end;gap:15px;flex-wrap:wrap;border-bottom:2px solid var(--ink);padding-bottom:15px;margin-bottom:16px}
+.page-hero h1 {font:normal clamp(3rem,8vw,6rem)/.94 var(--display);letter-spacing:-.078em;margin:.3rem 0}
+.service-grid {display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+.service-grid button {text-align:left;min-height:92px;background:var(--sheet)}
+.service-grid button:hover {border-color:var(--red)}
+.service-grid small,.service-grid strong {display:block;margin:.2rem 0}
+.channel {max-width:850px}
+.channel li {padding:15px;border:1px solid var(--rule);margin-bottom:9px;background:var(--sheet)}
+.alert-list {list-style:none;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.alert-card {padding:15px;background:var(--sheet);color:var(--ink);border:1px solid var(--rule);border-left:5px solid var(--quiet)}
+.alert-card.P1 {border-left-color:var(--red)}
+.alert-card.P2 {border-left-color:#a0ac21}
+.alert-card h2 {margin:.5rem 0 .15rem}
+.alert-card p {margin:0 0 10px}
+.alert-sources {margin-bottom:10px}
+[data-alert-filter][aria-pressed="true"] {background:var(--ink);color:var(--paper)}
+.delivery-channels {display:grid;gap:8px}
+.dialog-body .delivery-form {display:grid;gap:8px}
+.delivery-form fieldset {margin:0;min-width:0;padding:9px 12px;border:1px solid var(--rule)}
+.delivery-form fieldset button {margin-top:6px}
+.delivery-form .check-row {display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0}
+.delivery-form .check-row input {accent-color:var(--red)}
+.delivery-open {margin-left:6px}
+@media(max-width:720px) {.alert-list{grid-template-columns:1fr}}
+.calendar-grid {display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;margin-top:12px;text-align:center}
+.calendar-grid button {min-height:44px;padding:4px;position:relative}
+.calendar-grid button[aria-pressed="true"] {background:var(--acid);color:#191a14;box-shadow:inset 0 -3px #191a14}
+.calendar-count {display:block;font:.78rem/1 var(--mono);color:var(--red);margin-top:2px}
+.doc-link {text-align:left;white-space:normal;max-width:100%}
+.case-facts {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;border:1px solid var(--rule);margin:10px 0}
+.case-facts div {padding:10px 12px;border:1px solid var(--rule);min-width:0}
+.case-facts dt {font-size:.8125rem;color:var(--quiet);font-weight:650}
+.case-facts dd {margin:3px 0 0;overflow-wrap:anywhere}
+#answer-document:not(:empty) {margin:9px 0;padding:10px;border:1px solid var(--rule)}
+@media(max-width:650px) {.case-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.dialog-body textarea {display:block;width:100%;min-height:165px;resize:vertical;background:var(--paper);color:var(--ink);border:1px solid var(--rule);font:inherit;padding:10px;margin:7px 0 12px}
+footer {border-top:1px solid var(--ink);display:flex;justify-content:space-between;gap:12px;margin:28px 0 0;padding:11px 0 20px;font-size:.75rem;color:var(--quiet)}
+dialog {width:min(620px,calc(100% - 28px));max-height:87vh;padding:0;background:var(--sheet);color:var(--ink);border:1px solid var(--ink);box-shadow:7px 7px var(--ink)}
+dialog::backdrop {background:#1718128c}
+#assistant-window {position:fixed;inset:auto max(14px,3vw) 18px auto;margin:0;width:min(520px,calc(100% - 34px));z-index:6;max-height:75vh}
+.dialog-head {display:flex;align-items:start;justify-content:space-between;gap:10px;padding:15px;background:var(--acid);color:#191a14;border-bottom:1px solid #191a14}
+.dialog-head h2 {font:normal 1.8rem/1.08 var(--display);margin:.25rem 0;letter-spacing:-.04em}
+.dialog-body {padding:16px}
+.dialog-body p {margin:.3rem 0 .75rem}
+.dialog-body form {display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.dialog-body input {flex:1 1 16rem}
+.chat-answer {white-space:pre-wrap}
+#toast:not(:empty) {position:fixed;bottom:22px;right:22px;z-index:8;max-width:min(400px,calc(100% - 44px));background:var(--ink);color:var(--paper);border-left:7px solid var(--acid);padding:12px 14px;box-shadow:2px 2px var(--rule)}
+.intro {animation:unfold .25s ease-out both}
+@keyframes unfold {from {opacity:.3;transform:translateY(5px)} to {opacity:1;transform:translateY(0)}}
+body.night {color-scheme:dark;--paper:#191a14;--sheet:#22241a;--ink:#f6f3e8;--quiet:#d1cbb5;--rule:#72735f;--red:#ffa68e;--pale-red:#3c251b}
+.night .hero,.night .stats {display:none}
+.night .desk {margin-top:18px}
+.night .case-content {font-size:1.08rem}
+.night .P1 {color:var(--red)}
+.night button:hover {color:#191a14}
+@media(max-width:950px) {.frame{width:calc(100% - 36px)} .top{gap:9px} .top nav{order:3;width:100%;overflow:auto;flex-wrap:nowrap} .desk{grid-template-columns:minmax(180px, .85fr) minmax(0, 2fr);gap:14px} .service-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:650px) {.frame{width:calc(100% - 24px)} .hero{grid-template-columns:1fr;gap:12px;padding:22px 0 15px} .hero h1{font-size:clamp(2.7rem,11vw,4.8rem)} .radar{display:none} .stats {grid-template-columns:1fr 1fr;margin-bottom:16px} .stat:nth-child(2){border-right:0} .stat:nth-child(-n+2){border-bottom:1px solid var(--rule)} .stat:nth-child(3){padding-left:0} .desk{grid-template-columns:1fr} .queue-item{min-height:0} .queue-item strong{margin:.1rem 0} .duo{grid-template-columns:1fr} .service-grid{grid-template-columns:repeat(2,1fr)} .case-head,.case-content,.handoff{padding-inline:12px} .top-right{gap:5px} footer{flex-wrap:wrap} }
+@media(prefers-reduced-motion:reduce) {*,*::before,*::after{animation:none!important;scroll-behavior:auto!important}}
+
+</style>
+  <script type="module">
+const teammates = ['Maya Chen', 'Sam Rivera', 'Alex Morgan', 'Priya Shah'];
+
+const services = [
+  ['Payments API', 'Commerce'], ['Checkout', 'Commerce'], ['Order confirmation', 'Commerce'],
+  ['Identity Gateway', 'Identity'], ['Customer Portal', 'Identity'], ['Session Store', 'Identity'],
+  ['Inventory Database', 'Data'], ['Stock Sync', 'Data'], ['Analytics Warehouse', 'Data'],
+  ['Reporting', 'Operations'], ['Email Relay', 'Operations'], ['Support Inbox', 'Operations'],
+  ['Catalog API', 'Commerce'], ['Search Index', 'Commerce'], ['Pricing Engine', 'Commerce'],
+  ['Shipping API', 'Commerce'], ['Returns Portal', 'Commerce'], ['Tax Calculator', 'Commerce'],
+  ['Image CDN', 'Edge'], ['Public Website', 'Edge'], ['API Gateway', 'Edge'],
+  ['Feature Flags', 'Platform'], ['Config Registry', 'Platform'], ['Secrets Vault', 'Platform'],
+  ['Audit Logs', 'Platform'], ['Build Runner', 'Platform'], ['Message Queue', 'Platform'],
+  ['Object Storage', 'Data'], ['Backups', 'Data'], ['Billing Reports', 'Operations'],
+].map(([name, group]) => ({name, group}));
+
+const history = [
+  {id:'INC-096', date:'Oct 29', service:'Payments API', fingerprint:'PAY_CONN_RESET', title:'Timeouts after a configuration update', priority:'P2', responder:'Maya Chen', cause:'A checkout timeout was set too low.', fix:'Restored the previously validated timeout and verified checkout success.', runbook:'RB-013 · Validate payment recovery'},
+  {id:'INC-104', date:'Nov 06', service:'Identity Gateway', fingerprint:'JWKS_CACHE_MISS', title:'Login errors after key rotation', priority:'P2', responder:'Sam Rivera', cause:'The identity gateway cache held stale signing keys.', fix:'Refreshed the signing-key cache and confirmed successful sign-ins.', runbook:'RB-008 · Refresh identity cache'},
+  {id:'INC-109', date:'Nov 09', service:'Payments API', fingerprint:'PAY_PROVIDER_429', title:'Provider rate limit during peak hours', priority:'P1', responder:'Priya Shah', cause:'The external provider throttled authorization requests.', fix:null, runbook:null},
+  {id:'INC-087', date:'Oct 22', service:'Inventory Database', fingerprint:'POOL_EXHAUSTED', title:'Too many inventory connections', priority:'P2', responder:'Alex Morgan', cause:'A scheduled export filled the connection pool.', fix:'Rescheduled the export and verified the connection pool recovered.', runbook:'RB-017 · Check inventory connections'},
+  {id:'INC-081', date:'Oct 16', service:'Image CDN', fingerprint:'CDN_CACHE_MISS', title:'Image requests taking longer', priority:'P3', responder:'Priya Shah', cause:'Cache warmup was incomplete.', fix:'Warmed the cache before shifting traffic.'},
+  {id:'INC-079', date:'Oct 12', service:'Search Index', fingerprint:'INDEX_LAG', title:'Search results behind catalog', priority:'P3', responder:'Maya Chen', cause:'The indexer fell behind a bulk import.', fix:'Paused the import and let the indexer catch up.'},
+  {id:'INC-073', date:'Oct 08', service:'Email Relay', fingerprint:'MAIL_QUEUE', title:'Receipts delayed', priority:'P3', responder:'Sam Rivera', cause:'A relay worker stopped processing messages.', fix:'Restored the worker and verified the queue drained.'},
+  {id:'INC-070', date:'Oct 03', service:'Reporting', fingerprint:'REPORT_LATE', title:'Daily reports unavailable', priority:'P3', responder:'Alex Morgan', cause:'A scheduled warehouse job ran late.', fix:null},
+  {id:'INC-064', date:'Sep 26', service:'Stock Sync', fingerprint:'SYNC_LAG', title:'Stock levels stopped updating', priority:'P2', responder:'Priya Shah', cause:'The inventory consumer fell behind.', fix:'Recovered the consumer and checked item counts.'},
+  {id:'INC-061', date:'Sep 21', service:'Object Storage', fingerprint:'STORAGE_LATENCY', title:'Slow file uploads', priority:'P3', responder:'Maya Chen', cause:'A maintenance test temporarily limited throughput.', fix:'Verified upload latency returned to baseline after maintenance.'}
+];
+
+const documents = [
+  {
+    id:'RB-008', title:'Refresh the identity signing-key cache', service:'Identity Gateway', owner:'Identity Operations', updated:'Nov 8, 2026',
+    kind:'Recovery runbook', incident:'INC-104',
+    useWhen:'Sign-ins fail with JWKS_CACHE_MISS after key rotation, and the affected gateway still has the old key set.',
+    stopWhen:'The issuer cannot be reached, the new key is absent from the issuer, or the affected node already has the correct keys. Investigate those conditions before refreshing anything.',
+    steps:[
+      ['Confirm the signature', 'Compare failed and successful sign-ins on different gateway nodes. Record the key ID presented by the failing request and the key IDs loaded on the failing node.'],
+      ['Check the issuer', 'Confirm that the active key ID is published by the expected issuer. Check that the affected node can fetch the published key set.'],
+      ['Refresh the affected node', 'After an engineer confirms the mismatch, use the approved cache refresh operation on that node. Leave healthy gateway nodes and the issuer configuration in place.'],
+      ['Test a fresh sign-in', 'Verify the node loads the active key and accepts a newly issued token. Compare sign-in failure rates with the healthy nodes.'],
+    ],
+    verify:'A fresh sign-in succeeds on the affected node and JWKS_CACHE_MISS stops appearing during a five-minute observation window.',
+  },
+  {
+    id:'RB-013', title:'Triage payment timeouts after a deployment', service:'Payments API', owner:'Commerce Operations', updated:'Nov 10, 2026',
+    kind:'Conditional recovery runbook', incident:'INC-096',
+    useWhen:'Payment requests start timing out around a release that changed the authorization timeout.',
+    stopWhen:'If both versions fail at similar rates during the same provider window, or if provider errors are increasing across unaffected versions, investigate the provider before treating the release as the sole cause.',
+    steps:[
+      ['Confirm the exact change', 'Compare the previous release and the active rollout. Check the timeout value and the time at which the new version began serving traffic.'],
+      ['Compare equal traffic windows', 'Compare errors and latency for both versions over the same time window and provider route. A cluster at the new cutoff on the new version supports the release hypothesis.'],
+      ['Check the provider independently', 'Compare failed requests with the provider’s incident window and affected routes. Keep the time of the outage separate from the time it was reported.'],
+      ['Use the approved change process if supported', 'If the engineer confirms the new timeout is the differentiating factor, review the approved rollback or previous timeout configuration. If the evidence points to the provider, follow the provider response procedure instead.'],
+    ],
+    verify:'Compare completed checkouts and successful authorizations with the pre-alert baseline. Check that customer retries do not create duplicate orders.',
+  },
+  {
+    id:'RB-017', title:'Recover an exhausted inventory connection pool', service:'Inventory Database', owner:'Data Platform', updated:'Oct 23, 2026',
+    kind:'Recovery runbook', incident:'INC-087',
+    useWhen:'The error signature is POOL_EXHAUSTED and an overlapping job is consuming available connections.',
+    stopWhen:'If a connection is accepted and the stall starts during commit, this procedure does not apply.',
+    steps:[
+      ['Check pool saturation', 'Compare active connections, waiting clients, and checkout timeouts with baseline.'],
+      ['Identify the job', 'Compare scheduled exports with the increase in open connections. Confirm that the job can be rescheduled with its owner.'],
+      ['Reschedule and verify', 'An engineer reschedules the competing export, then checks that connection wait time and inventory writes return to baseline.'],
+    ],
+    verify:'Connection wait time falls and representative stock updates complete during the next workload window.',
+  },
+  {
+    id:'DG-023', title:'Diagnose inventory commit stalls', service:'Inventory Database', owner:'Data Platform', updated:'Nov 20, 2026',
+    kind:'Investigation guide',
+    useWhen:'Inventory writes accept a connection but stall during commit, with no matching fix in history.',
+    stopWhen:'A recent deployment or scheduled job is a lead. Avoid recommending a change until the affected write path and a measurable cause are established.',
+    steps:[
+      ['Measure the scope', 'Compare stalled and successful writes by operation, database node, and time window. Determine whether the stalls began at the same time as the import.'],
+      ['Inspect the write path', 'Check read-only lock wait and transaction latency metrics for the stalled operations. Confirm whether the resized reporting replica is involved in that path.'],
+      ['Distinguish two explanations', 'If the issue is isolated to the import, check its transaction overlap with affected writes. If unrelated writes stall too, compare primary transaction latency and shared dependencies.'],
+      ['Record what remains unknown', 'Capture the affected operations, supporting observations, and the next owner. Escalate to the database owner if the investigation does not establish a cause.'],
+    ],
+    verify:'Check commit latency and completed stock updates during the following batch window. This guide provides diagnostics only.',
+  },
+  {
+    id:'DG-007', title:'Triage reports delayed during maintenance', service:'Reporting', owner:'Reporting Operations', updated:'Nov 18, 2026',
+    kind:'Investigation guide',
+    useWhen:'A reporting alert falls inside a documented warehouse maintenance window.',
+    stopWhen:'If the affected report is outside the maintenance scope, or misses its next expected refresh after maintenance, investigate it as a separate incident.',
+    steps:[
+      ['Validate the planned overlap', 'Check the maintenance ticket, affected warehouse jobs, and expected report refresh timing.'],
+      ['Check freshness and backlog', 'Record the last successful refresh. Check job status and whether stale reports are isolated to the planned scope.'],
+      ['Check after the window', 'For this case, check the next scheduled job after 10:45 ET. If it fails or the delay extends outside the expected window, hand the evidence to Reporting Operations.'],
+    ],
+    verify:'Confirm the next expected jobs complete and dependent reports show fresh timestamps.',
+  },
+  {
+    id:'RB-011', title:'Recover an incomplete Image CDN warmup', service:'Image CDN', owner:'Edge Operations', updated:'Oct 17, 2026',
+    kind:'Recovery runbook', incident:'INC-081',
+    useWhen:'Elevated image latency coincides with a low cache hit rate following a change.',
+    stopWhen:'If origin latency is also elevated, investigate the origin before shifting traffic.',
+    steps:[['Confirm the cache signal','Compare hit rates and origin latency by region.'],['Warm before shifting','Follow the approved warmup checklist for popular objects and compare a sample of requests.'],['Verify regional recovery','Confirm hit rates and image response times are back near baseline.']],
+    verify:'Representative image requests are served within baseline latency across affected regions.',
+  },
+  {
+    id:'RB-012', title:'Drain search indexing lag after a bulk import', service:'Search Index', owner:'Commerce Operations', updated:'Oct 13, 2026',
+    kind:'Recovery runbook', incident:'INC-079',
+    useWhen:'Indexing lag begins during a bulk catalog import and queued changes continue to grow.',
+    stopWhen:'Check dataset integrity and indexer health before resuming an import that produced processing errors.',
+    steps:[['Check backlog age','Compare queue depth and oldest unindexed changes with the start of the import.'],['Pause import with its owner','Give the indexer time to drain queued changes before resuming at an approved rate.'],['Sample search results','Confirm recent catalog edits appear in representative searches.']],
+    verify:'Backlog age returns to baseline and recent catalog edits appear in search.',
+  },
+  {
+    id:'RB-015', title:'Restore receipt delivery after a worker stall', service:'Email Relay', owner:'Operations', updated:'Oct 9, 2026',
+    kind:'Recovery runbook', incident:'INC-073',
+    useWhen:'Receipts accumulate in the relay queue and the worker heartbeat is missing.',
+    stopWhen:'Investigate downstream mail-provider errors first if the worker continues processing normally.',
+    steps:[['Check the receipt queue','Compare queue age, worker heartbeat, and delivery errors.'],['Recover the worker','An engineer uses the approved worker recovery process once the stall is confirmed.'],['Check a sample delivery','Confirm queue age decreases and a representative receipt arrives once.']],
+    verify:'Receipt queue age returns to baseline without duplicate receipt delivery.',
+  },
+  {
+    id:'RB-021', title:'Recover stock synchronization lag', service:'Stock Sync', owner:'Data Platform', updated:'Sep 27, 2026',
+    kind:'Recovery runbook', incident:'INC-064',
+    useWhen:'The stock consumer is behind and product counts drift from the inventory source.',
+    stopWhen:'Investigate data integrity before restarting a consumer with repeated message-processing errors.',
+    steps:[['Identify where lag starts','Compare the oldest pending update with the last successful consumer checkpoint.'],['Recover the consumer','Follow the owner-approved recovery procedure and let the queue drain from a verified checkpoint.'],['Reconcile counts','Compare a representative item sample with the upstream inventory source.']],
+    verify:'Consumer lag returns to baseline and representative counts match the source.',
+  },
+  {
+    id:'RB-026', title:'Verify uploads after storage maintenance', service:'Object Storage', owner:'Data Platform', updated:'Sep 22, 2026',
+    kind:'Recovery runbook', incident:'INC-061',
+    useWhen:'Upload latency increases during a scheduled storage throughput test.',
+    stopWhen:'Open a separate investigation if upload errors occur outside the expected test window.',
+    steps:[['Confirm the maintenance scope','Compare the affected bucket groups and regions with the maintenance record.'],['Measure after maintenance','Compare representative uploads with the pre-window baseline.'],['Check completeness','Confirm uploads complete and the stored objects are readable for the test cases.']],
+    verify:'Upload completion rate and latency return to baseline in the affected groups.',
+  },
+];
+
+const scenarios = [
+  {
+    id:'INC-121', variant:'After a release', service:'Payments API', title:'Checkout payments failing', owner:'Maya Chen', fingerprint:'PAY_AUTH_TIMEOUT', alert:'10:02',
+    affectedPct:38, core:true, confirmed:['Payments API','Checkout'], possible:['Order confirmation'], document:'RB-013',
+    findings:[
+      {text:'The error rate rose from a 0.4% authorization baseline to 38% checkout failures after a release changed the authorization timeout from 3 s to 1 s.', ids:['MET-21','CHG-78','ALT-23']},
+      {text:'Failures concentrate on v2.8.0 at the new 1 s cutoff. That makes the release a stronger lead than timing alone.', ids:['CHG-78','LOG-41']},
+      {text:'ClearPay estimated its latency began at 10:01. It published the bulletin at 10:07, after the team had already received the alert.', ids:['EXT-09']},
+    ],
+    unknowns:['Whether older app versions time out on the same provider route.', 'Whether customers eventually complete orders after retrying.', 'Whether order confirmation is affected.'],
+    money:{low:4,high:7,order:65},
+    events:[
+      {id:'MET-21', time:'09:43', seen:'09:43', kind:'Metric', title:'Payment baseline', detail:'Authorization errors at 0.4%; checkout success normal.'},
+      {id:'CHG-78', time:'09:54', seen:'09:54', kind:'Change', title:'Payments API v2.8.0 deployed', detail:'The release lowered the authorization timeout from 3 s to 1 s.'},
+      {id:'LOG-41', time:'10:02', seen:'10:02', kind:'Log', title:'PAY_AUTH_TIMEOUT starts', detail:'Failed requests cluster on v2.8.0; most fail at the new 1 s cutoff.'},
+      {id:'ALT-22', time:'10:02', seen:'10:02', kind:'Alert', service:'Payments API', signature:'PAY_AUTH_TIMEOUT', title:'Payment authorization failures rise', detail:'The Payments API monitor reports failures tagged PAY_AUTH_TIMEOUT.'},
+      {id:'ALT-23', time:'10:02', seen:'10:02', kind:'Alert', service:'Checkout', signature:'PAY_AUTH_TIMEOUT', title:'Checkout failure rate reaches 38%', detail:'Checkout depends on Payments API. Its failures report the same upstream authorization timeout.'},
+      {id:'SUP-16', time:'10:04', seen:'10:04', kind:'Ticket', title:'Customers report payment failures', detail:'Support records 12 checkout reports. Order confirmation impact remains unverified.'},
+      {id:'EXT-09', time:'10:01', seen:'10:07', kind:'Provider', title:'ClearPay reports elevated latency', detail:'Bulletin published at 10:07. The provider estimates its latency started at 10:01.'},
+    ],
+    cause:'The new 1-second payment timeout is the leading clue.', causeSources:['CHG-78','LOG-41'],
+    alternative:'ClearPay latency may also explain the timeouts. Both factors could be contributing.', alternativeSource:'EXT-09',
+    next:'Compare old and new app versions against the same provider and time window.',
+    verify:'Verify successful authorizations and completed checkouts return to baseline across both versions.',
+  },
+  {
+    id:'INC-122', variant:'Repeat incident', service:'Identity Gateway', title:'Sign-ins rejected after key rotation', owner:'Sam Rivera', fingerprint:'JWKS_CACHE_MISS', alert:'10:09',
+    affectedPct:9, core:true, confirmed:['Identity Gateway'], possible:['Customer Portal','Session Store'], document:'RB-008',
+    findings:[
+      {text:'The identity issuer completed scheduled signing-key rotation at 10:00. At 10:08, one node rejected requests signed by the new active key.', ids:['CHG-81','LOG-44']},
+      {text:'The monitoring alert recorded 9% sign-in failures at 10:09, concentrated on one node. Compare its cached keys with the keys on a healthy node.', ids:['ALT-25','LOG-44']},
+      {text:'INC-104 had the same service and JWKS_CACHE_MISS signature. Sam Rivera restored sign-ins by refreshing the stale cache.', ids:['INC-104','LOG-44']},
+    ],
+    unknowns:['Whether the affected node can reach the issuer now.', 'Whether the current cache actually lacks the active key.', 'Whether any downstream portal or session checks failed.'],
+    events:[
+      {id:'CHG-81', time:'10:00', seen:'10:00', kind:'Change', title:'Signing keys rotated', detail:'Scheduled identity key rotation completed.'},
+      {id:'LOG-44', time:'10:08', seen:'10:08', kind:'Log', title:'JWKS_CACHE_MISS', detail:'A gateway node rejects requests signed with the newly active key.'},
+      {id:'ALT-25', time:'10:09', seen:'10:09', kind:'Alert', title:'Sign-in error rate reaches 9%', detail:'Failures cluster on one gateway node.'},
+    ],
+    cause:'A stale signing-key cache is likely on one gateway node.', causeSources:['LOG-44','INC-104'],
+    next:'Compare the active signing-key ID with the key IDs cached on the affected gateway node.',
+    verify:'Confirm new sign-ins pass on the affected node and remain at baseline.',
+  },
+  {
+    id:'INC-123', variant:'Unknown issue', service:'Inventory Database', title:'Unfamiliar database stalls', owner:'Alex Morgan', fingerprint:'INV_COMMIT_STALL', alert:'10:12',
+    affectedPct:5, core:false, confirmed:['Inventory Database'], possible:['Stock Sync'], document:'DG-023',
+    findings:[
+      {text:'The reporting replica was resized at 09:48. Stock import started at 10:04. Both are recent changes; neither establishes the cause.', ids:['CHG-82','CHG-83']},
+      {text:'Affected writes accept a connection and then stall. No pool timeout appeared in the logs, unlike archived incident INC-087.', ids:['LOG-48','INC-087']},
+      {text:'Five percent of stock updates exceeded the monitor threshold. A sample of completed and stalled writes would help isolate the affected path.', ids:['ALT-27']},
+    ],
+    unknowns:['Whether the import caused overlapping writes or lock waits.', 'Whether the resized read replica participates in this write path.', 'Whether delays have propagated to Stock Sync.'],
+    events:[
+      {id:'CHG-82', time:'09:48', seen:'09:48', kind:'Change', title:'Inventory read replica resized', detail:'Capacity changed on the reporting replica.'},
+      {id:'CHG-83', time:'10:04', seen:'10:04', kind:'Change', title:'Stock import enabled', detail:'A scheduled inventory write batch started.'},
+      {id:'LOG-48', time:'10:11', seen:'10:11', kind:'Log', title:'INV_COMMIT_STALL', detail:'Some writes stall after accepting a connection. No connection-pool errors are present.'},
+      {id:'ALT-27', time:'10:12', seen:'10:12', kind:'Alert', title:'Inventory writes slow down', detail:'5% of stock-update operations exceed the latency threshold.'},
+    ],
+    cause:'Cause unknown. The sample history has no matching error signature.', causeSources:['LOG-48'],
+    next:'Compare stalled writes before and after the stock import. Check whether the resized replica is on that request path.',
+    verify:'Watch write latency and stock-update completion through the next batch window.',
+  },
+  {
+    id:'INC-124', variant:'Planned work', service:'Reporting', title:'Scheduled reports delayed', owner:'Priya Shah', fingerprint:'REPORT_LATE', alert:'10:20',
+    affectedPct:4, core:false, confirmed:['Reporting'], possible:['Billing Reports'], document:'DG-007',
+    findings:[
+      {text:'Warehouse maintenance was scheduled from 10:15 to 10:45 ET. The reporting alert fired at 10:20 when a scheduled refresh missed its expected time.', ids:['MNT-07','ALT-29']},
+      {text:'Alex Morgan handled a previous reporting delay with the same error signature. The archive records the cause but has no resolution steps.', ids:['INC-070']},
+    ],
+    unknowns:['Whether this particular report is listed in the maintenance scope.', 'Whether the next refresh completes after 10:45.', 'Whether billing reports are stale as well.'],
+    events:[
+      {id:'MNT-07', time:'10:15', seen:'10:15', kind:'Maintenance', title:'Reporting maintenance window', detail:'Scheduled warehouse maintenance runs 10:15–10:45.'},
+      {id:'ALT-29', time:'10:20', seen:'10:20', kind:'Alert', title:'Scheduled reports delayed', detail:'An internal report missed its expected refresh time.'},
+    ],
+    cause:'The delay overlaps planned warehouse maintenance. Causation remains unconfirmed.', causeSources:['MNT-07','ALT-29'],
+    next:'Check the maintenance ticket for expected impact and compare report freshness after 10:45.',
+    verify:'Confirm the scheduled jobs run successfully after the maintenance window.',
+  },
+];
+
+const upcoming = [
+  {date:'Nov 22', time:'14:00', kind:'Maintenance', service:'Object Storage', title:'Planned storage maintenance'},
+  {date:'Nov 23', time:'09:30', kind:'Change', service:'Search Index', title:'Scheduled index refresh'},
+  {date:'Nov 25', time:'18:00', kind:'Change', service:'Customer Portal', title:'Scheduled portal release'},
+];
+
+function investigate(incident, cutoff = '23:59') {
+  const evidence = incident.events.filter(event => event.seen <= cutoff)
+    .sort((first, second) => first.seen.localeCompare(second.seen));
+  const observed = cutoff >= incident.alert;
+  const nearby = observed ? history.filter(record => record.service === incident.service) : [];
+  const exact = nearby.filter(record => record.fingerprint === incident.fingerprint);
+  const changes = evidence.filter(event => ['Change','Maintenance'].includes(event.kind));
+  const logs = evidence.filter(event => ['Log','Metric'].includes(event.kind));
+  const signals = evidence.filter(event => ['Alert','Ticket','Provider'].includes(event.kind));
+  const relatedAlerts = evidence.filter(event => event.kind === 'Alert' && event.signature === incident.fingerprint &&
+    incident.confirmed.includes(event.service) && event.time === incident.alert);
+  const alternative = evidence.find(event => event.id === incident.alternativeSource);
+  const ready = observed && incident.causeSources.every(id =>
+    evidence.some(event => event.id === id) || nearby.some(record => record.id === id));
+  const availableIds = new Set([...evidence,...nearby].map(item=>item.id));
+  const findings = incident.findings.filter(finding=>finding.ids.every(id=>availableIds.has(id)));
+  const guide = observed ? documents.find(document=>document.id===incident.document) : undefined;
+  const relatedDocuments = documents.filter(document=>document !== guide && nearby.some(record=>record.id===document.incident));
+  const known = exact.find(record=>record.fix);
+  const verifiedDocument = relatedDocuments.find(document=>document.incident===known?.id) ||
+    (guide?.incident===known?.id && known ? guide : undefined);
+  const activity = [
+    {action:'Read monitoring records', result:`${logs.length} log or metric records available`, query:incident.fingerprint, ids:logs.map(item=>item.id)},
+    {action:'Cross-check changes', result:`${changes.length} relevant change or maintenance records`, query:incident.service, ids:changes.map(item=>item.id)},
+    {action:'Search incident history', result:`${nearby.length} on the same service · ${exact.length} exact signature matches`, query:incident.fingerprint, ids:nearby.map(item=>item.id)},
+    {action:'Check alerts and reports', result:`${signals.length} monitoring, support, or provider signals`, query:`Available through ${cutoff === '23:59' ? 'latest snapshot' : cutoff}`, ids:signals.map(item=>item.id)},
+    {action:'Look up procedures', result:verifiedDocument ? 'Found a procedure linked to a matching documented fix' : guide ? 'Found investigation guidance; no matching documented fix' : 'No incident procedure selected yet', query:incident.service, ids:[guide,...relatedDocuments].filter(Boolean).map(document=>document.id)},
+  ];
+  return {evidence, observed, nearby, exact, changes, alternative, ready, activity, relatedAlerts,
+    known, guide, relatedDocuments, verifiedDocument, findings,
+    cause:ready ? incident.cause : 'No incident brief was available at this point.'};
+}
+
+function priority(incident) {
+  if (incident.core && incident.affectedPct >= 25) return 'P1';
+  if (incident.core || incident.affectedPct >= 5) return 'P2';
+  return 'P3';
+}
+
+
+const main = document.querySelector('#main');
+const dialog = document.querySelector('#dialog');
+const assistantWindow = document.querySelector('#assistant-window');
+const persona = document.querySelector('#persona');
+const night = document.querySelector('#night');
+const saveKey = 'incident-compass-workspace-v1';
+const windowMs = 30_000;
+const tabs = [['brief','Brief'],['details','Case details'],['runbook','Runbooks'],['trace','Investigation log'],['replay','Time Machine'],['compare','Compare']];
+const pages = ['desk','alerts','services','history','runbooks','calendar','chat'];
+const byId = id => scenarios.find(incident => incident.id === id);
+const html = value => String(value ?? '').replace(/[&<>"']/g, char =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const badge = level => `<span class="badge ${level}">${level}</span>`;
+const ref = id => `<button type="button" class="ref" data-source="${html(id)}">${html(id)}</button>`;
+const documentLink = document => `<button type="button" class="small doc-link" data-source="${html(document.id)}">${html(document.id)} · ${html(document.title)}</button>`;
+const cad = dollars => new Intl.NumberFormat('en-CA', {style:'currency',currency:'CAD',maximumFractionDigits:0}).format(dollars);
+const levels = ['P1','P2','P3'];
+const severityNames = {P1:'Critical',P2:'High',P3:'Monitor'};
+const incidentPriority = (incident,state = workspace) => state.priorities?.[incident.id] || priority(incident);
+
+function initial() {
+  return {active:scenarios.slice(0,3).map(incident => incident.id), tasks:{}, messages:[], priorities:{}, notifications:[], notes:{}};
+}
+function read() {
+  try { return JSON.parse(localStorage.getItem(saveKey)) || initial(); }
+  catch { return initial(); }
+}
+let workspace = read();
+let actor = sessionStorage.getItem('ic-actor') || teammates[0];
+let selected = 'INC-121';
+let activeTab = 'brief';
+let cutoff = '23:59';
+let query = '';
+let connected = false;
+let toastTimer;
+let speech;
+let dialogRevision = 0;
+let escalatorBusy = false;
+let conversation = [];
+let conversationScope;
+let calendarMonth = 10;
+let calendarDay;
+let alertFilter = 'all';
+let automaticTelegram = false;
+let deliveryState;
+let deliveryPreview;
+const channelSetup = {
+  sms:{name:'SMS',provider:'Twilio',setup:'https://console.twilio.com/',fields:[['TWILIO_ACCOUNT_SID','Account SID'],['TWILIO_AUTH_TOKEN','Auth token',true],['TWILIO_FROM','SMS-capable sender number']]},
+  email:{name:'Email',provider:'Resend',setup:'https://resend.com/api-keys',fields:[['RESEND_API_KEY','API key',true],['ALERT_EMAIL_FROM','Verified sender email']]},
+  telegram:{name:'Telegram',provider:'Telegram Bot API',setup:'https://t.me/BotFather',fields:[['TELEGRAM_BOT_TOKEN','BotFather token',true],['TELEGRAM_CHAT_ID','Chat ID or public channel username']]},
+};
+
+persona.innerHTML = teammates.map(name => `<option>${html(name)}</option>`).join('');
+persona.value = actor;
+document.body.classList.toggle('night', localStorage.getItem('ic-night') === 'true');
+night.setAttribute('aria-pressed', String(document.body.classList.contains('night')));
+
+function view() {
+  const hash = location.hash.slice(1);
+  return pages.includes(hash) ? hash : 'desk';
+}
+function notice(message) {
+  const toast = document.querySelector('#toast');
+  clearTimeout(toastTimer);
+  toast.textContent = message;
+  toastTimer = setTimeout(() => { toast.textContent = ''; }, 4800);
+}
+
+async function update(change) {
+  const apply = () => {
+    workspace = read();
+    const message = change(workspace);
+    localStorage.setItem(saveKey, JSON.stringify(workspace));
+    render();
+    if (message) notice(message);
+  };
+  if (navigator.locks) await navigator.locks.request(saveKey, apply);
+  else apply();
+}
+
+function escalate(state, incident, reason) {
+  state.tasks[incident.id] = {status:'open', reason};
+  state.messages.push({id:incident.id, type:'open', reason, time:Date.now()});
+  notification(state,incident.id,'Team escalation',`Posted to #general. ${reason}`);
+}
+
+function notification(state,id,title,description) {
+  (state.notifications ||= []).unshift({id,title,description,time:Date.now(),level:incidentPriority(byId(id),state)});
+  state.notifications.length = Math.min(state.notifications.length,30);
+}
+
+function pageOnCall(state,incident) {
+  state.tasks[incident.id] = {status:'pending', until:Date.now() + windowMs};
+  notification(state,incident.id,'Urgent page',`Awaiting acknowledgement from ${incident.owner}.`);
+}
+
+function tick() {
+  const latest = read();
+  const due = Object.entries(latest.tasks).filter(([, task]) => task.status === 'pending' && task.until <= Date.now());
+  if (due.length && !escalatorBusy) {
+    escalatorBusy = true;
+    update(state => {
+      const expired = due.filter(([id]) => state.tasks[id]?.status === 'pending' && state.tasks[id].until <= Date.now());
+      for (const [id] of expired) escalate(state, byId(id), 'Acknowledgement timed out.');
+      if (expired.length) return 'Urgent page escalated to #general.';
+    }).finally(() => { escalatorBusy = false; });
+  }
+  const timer = document.querySelector('[data-countdown]');
+  const task = latest.tasks[selected];
+  if (timer && task?.status === 'pending') timer.textContent = Math.max(0, Math.ceil((task.until - Date.now()) / 1000)) + 's';
+}
+
+function actionOnTask(action, id) {
+  const incident = byId(id);
+  if (!incident) return;
+  const performer = actor;
+  void update(state => {
+    if (!state.active.includes(id)) return;
+    const task = state.tasks[id];
+    if (action === 'page' && !task && incidentPriority(incident,state) === 'P1') {
+      pageOnCall(state,incident);
+      return `Urgent page sent to ${incident.owner} in this demo.`;
+    }
+    if (task?.status === 'pending' && task.until <= Date.now()) {
+      escalate(state, incident, 'Acknowledgement timed out.');
+      return 'The acknowledgement window ended. Claim it in #general.';
+    }
+    if (task?.status === 'pending' && (action === 'expire' || (action === 'decline' && performer === incident.owner))) {
+      escalate(state, incident, action === 'expire' ? 'Demo: acknowledgement window expired.' : `${performer} is unavailable.`);
+      return 'Urgent page escalated to #general.';
+    }
+    const canAccept = action === 'accept' && task?.status === 'pending' && performer === incident.owner;
+    const canClaim = action === 'claim' && task?.status === 'open';
+    if (canAccept || canClaim) {
+      state.tasks[id] = {status:'claimed', by:performer};
+      notification(state,id,'Ownership confirmed',`${performer} accepted the task.`);
+      if (canClaim) state.messages.push({id, type:'claim', by:performer, time:Date.now()});
+      return `${performer} accepted ownership of ${id}.`;
+    }
+  });
+}
+
+function taskBar(incident) {
+  const task = workspace.tasks[incident.id];
+  if (!task && incidentPriority(incident) !== 'P1') return '';
+  const taskButton = (action, label, style = '') => `<button class="small ${style}" data-task="${action}" data-id="${incident.id}">${html(label)}</button>`;
+  if (!task) return `<div class="handoff"><span><strong>Urgent response</strong> · ${incident.owner} on call</span>${taskButton('page','Page on-call','primary')}</div>`;
+  if (task.status === 'claimed') return `<div class="handoff"><strong>Accepted by ${html(task.by)}</strong><span class="small quiet">Owner confirmed</span></div>`;
+  if (task.status === 'open') return `<div class="handoff"><strong>Escalated to #general</strong><div class="buttons"><button class="small" data-nav="chat">Open team chat</button>${taskButton('claim','Claim as ' + actor,'primary')}</div></div>`;
+  return `<div class="handoff"><span><strong>Waiting for ${incident.owner}</strong> · <span class="mono" data-countdown>${Math.max(0,Math.ceil((task.until-Date.now())/1000))}s</span></span><div class="buttons">
+    ${actor === incident.owner ? taskButton('accept','Accept task','primary') + taskButton('decline','I’m busy','danger') : ''}
+    ${taskButton('expire','Simulate timeout')}</div></div>`;
+}
+
+function brief(incident, result) {
+  if (!result.observed) return '<div class="lead"><strong>The alert hasn’t fired yet.</strong><p>Move the Time Machine forward to see the brief as it became available.</p></div>';
+  const historical = result.nearby[0];
+  const money = incident.money;
+  const snapshotTime = cutoff === '23:59' ? result.evidence.at(-1)?.seen || incident.alert : cutoff;
+  const minutes = Math.max(0,toMinute(snapshotTime)-toMinute(incident.alert));
+  const estimate = money && `${cad(money.low * money.order * minutes)}–${cad(money.high * money.order * minutes)} CAD`;
+  return `<div class="lead"><div class="kicker">${result.exact.length && result.known ? 'Strong historical match' : incident.variant === 'Unknown issue' ? 'Needs investigation' : 'Working hypothesis'}</div>
+    <h3>${html(result.cause)}</h3><div class="references">${incident.causeSources.map(ref).join('')}</div></div>
+    ${result.alternative ? `<div class="panel dissent"><div class="kicker">Dissenting Detective</div><p>${html(incident.alternative)}</p>${ref(result.alternative.id)}
+    <details class="block"><summary>What would change the lead?</summary><p>If the old version times out at the same rate during the same provider window, the release becomes a weaker explanation.</p></details></div>` : ''}
+    <div class="duo block">
+      <div class="panel"><div class="kicker">Known fix</div><h3>${result.known ? html(result.known.fix) : 'No known fix for this alert'}</h3>
+      <p class="quiet">${result.known ? `Documented by ${html(result.known.responder)} in ${html(result.known.id)}.` : result.exact.length ? `The matching record lists ${html(result.exact[0].responder)} and omits the resolution steps.` : 'The history has no matching error signature with a verified fix.'}</p>
+      ${historical ? ref(result.known?.id || historical.id) : ''}
+      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}</div>` : ''}</div>
+      <div class="panel"><div class="kicker">First check</div><h3>${html(incident.next)}</h3><small>The on-call engineer reviews the evidence and decides.</small></div>
+    </div>
+    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}</div>` : ''}
+    <div class="duo block">
+      <div class="panel"><div class="kicker">Recent changes</div><ul class="archive">${result.changes.map(change => `<li><strong>${html(change.title)}</strong><br><small>${change.time} ET</small> ${ref(change.id)}</li>`).join('') || '<li>No relevant change recorded in this snapshot.</li>'}</ul></div>
+      <div class="panel"><div class="kicker">Impact and priority</div><h3>${incidentPriority(incident)} · ${incident.affectedPct}% of monitored operations affected</h3>
+      <p>Confirmed: ${incident.confirmed.join(', ')}.<br>Possible downstream impact: ${incident.possible.join(', ')}.</p>
+      <details><summary>Why this priority?</summary><p>Suggested ${priority(incident)}. ${incident.core ? 'Customer-facing service.' : 'Internal or indirect customer impact.'} Priority considers the affected share and whether the service is customer-facing. ${historical ? `Previous incident ${historical.id} was ${historical.priority}.` : ''}</p></details>
+      ${money ? `<details><summary>${estimate} in orders at risk</summary><p>${minutes} min × ${money.low}–${money.high} affected orders/min × ${cad(money.order)} per order. Fictional inputs through ${snapshotTime} ET. Orders may be delayed or recovered.</p>
+      <label for="cost-window">Explore duration: <output id="cost-minutes">${minutes} minutes</output></label><input type="range" class="range" id="cost-window" min="0" max="60" value="${minutes}">
+      <p id="cost-projection" role="status">${estimate} at this duration</p></details>` : '<small>Financial impact unknown.</small>'}</div>
+    </div>
+    ${result.relatedAlerts.length > 1 ? `<div class="panel block"><details><summary>${result.relatedAlerts.length} alerts grouped into this incident</summary><p>The monitors fired in the same minute and reported the same upstream error. Checkout depends on Payments API.</p>
+    <ul class="archive">${result.relatedAlerts.map(event=>`<li>${html(event.service)} · ${html(event.time)} ET · ${ref(event.id)}</li>`).join('')}</ul><small>Shared cause remains a working hypothesis.</small></details></div>` : ''}
+    <div class="panel block"><details><summary>Recovery checks</summary><p>${html(incident.verify)}</p></details></div>`;
+}
+
+function caseDetails(incident,result) {
+  if (!result.observed) return '<p>The alert had not fired at this point in the replay.</p>';
+  const ownership = workspace.tasks[incident.id];
+  return `<div class="row"><h3>Case facts</h3><span class="badge neutral">Sample records</span></div>
+    <dl class="case-facts">
+      <div><dt>Alert received</dt><dd>${incident.alert} ET</dd></div><div><dt>Error signature</dt><dd class="mono">${html(incident.fingerprint)}</dd></div>
+      <div><dt>Assigned on call</dt><dd>${html(incident.owner)}${ownership?.by ? ' · Accepted by ' + html(ownership.by) : ''}</dd></div>
+      <div><dt>Monitored operations affected</dt><dd>${incident.affectedPct}%</dd></div>
+      <div><dt>Confirmed impact</dt><dd>${html(incident.confirmed.join(', '))}</dd></div>
+      <div><dt>Possible downstream impact</dt><dd>${html(incident.possible.join(', '))}</dd></div>
+    </dl>
+    <section class="panel block"><h3>What the records show</h3><ol class="archive">${result.findings.map(finding=>`<li><p>${html(finding.text)}</p><div class="references">${finding.ids.map(ref).join('')}</div></li>`).join('')}</ol></section>
+    <section class="panel block"><h3>Open questions</h3><ul>${incident.unknowns.map(question=>`<li>${html(question)}</li>`).join('')}</ul><p><strong>First check:</strong> ${html(incident.next)}</p></section>
+    <section class="panel block"><h3>Raw records in this snapshot</h3><ul class="archive">${result.evidence.map(event=>`<li><div class="row"><strong>${html(event.title)}</strong>${ref(event.id)}</div><small>${html(event.kind)} · Available at ${event.seen} ET</small><p>${html(event.detail)}</p></li>`).join('')}</ul></section>`;
+}
+
+function incidentRunbooks(result) {
+  if (!result.observed) return '<p>The alert had not fired at this point in the replay.</p>';
+  const guide = result.guide;
+  return `<div class="lead"><h3>${result.verifiedDocument ? 'Procedure linked to the matching past fix' : 'No verified fix for this error signature'}</h3>
+    <p>${result.verifiedDocument ? 'Check the runbook preconditions against the current evidence before following it.' : 'The documentation below can help you investigate or compare this alert with a different case.'}</p></div>
+    ${guide ? `<section class="panel block"><div class="kicker">${html(guide.kind)}</div><h3>${html(guide.title)}</h3><p>${html(guide.useWhen)}</p>
+    <ol class="archive">${guide.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
+    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}</section>` : ''}
+    ${result.relatedDocuments.length ? `<section class="panel block"><h3>Related archive documentation</h3><p>Compare the preconditions and error signature before using a procedure from another incident.</p><div class="references">${result.relatedDocuments.map(documentLink).join('')}</div></section>` : ''}`;
+}
+
+function toMinute(time) {
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function trace(result) {
+  return `<h3>Investigation activity</h3><p class="quiet">These are the records the app checked, the search terms it used, and what came back.</p>
+    <ol class="trace">${result.activity.map(step=>`<li><strong>${html(step.action)}</strong><br><span class="mono quiet">${html(step.query)}</span><p>${html(step.result)}</p><div class="references">${step.ids.map(ref).join('')}</div></li>`).join('')}</ol>`;
+}
+
+function times(incident) {
+  return [...new Set(incident.events.map(event=>event.seen))].sort();
+}
+
+function replay(incident, result) {
+  const stamps = times(incident);
+  const index = cutoff === '23:59' ? stamps.length - 1 : stamps.indexOf(cutoff);
+  return `<div class="row"><h3>What did we know at the time?</h3><button class="small" data-live>Latest snapshot</button></div>
+    <p class="quiet">Scrub through when evidence first became available.</p>
+    <label for="replay-range">Evidence available at <strong class="mono" id="replay-time">${stamps[index]} ET</strong></label>
+    <input class="range" id="replay-range" type="range" min="0" max="${stamps.length - 1}" value="${index}" aria-valuetext="${stamps[index]} ET">
+    <div id="replay-details">${replayDetails(incident,result)}</div>`;
+}
+
+function replayDetails(incident,result) {
+  return `<p class="lead"><strong>${html(result.cause)}</strong>${result.alternative ? `<br>${html(incident.alternative)}` : ''}</p>
+    <ul class="timeline">${result.evidence.map(event=>`<li><span class="mono">${event.seen} ET / ${event.kind}</span><br><strong>${html(event.title)}</strong><p>${html(event.detail)}</p>${ref(event.id)}</li>`).join('')}</ul>`;
+}
+
+function compare(incident, result) {
+  if (!result.observed) return '<p>The alert has not fired at this point in the replay.</p>';
+  const record = result.exact[0] || result.nearby[0];
+  if (!record) return '<p>No relevant incident found in the sample archive.</p>';
+  const match = incident.fingerprint === record.fingerprint;
+  return `<p class="lead"><strong>${match ? 'Same service and error signature.' : 'Same service, different error signature.'}</strong><br>${match ? 'Verify the earlier fix applies to the current environment.' : 'Treat the old resolution as background only.'}</p>
+    <div class="duo"><section class="panel"><div class="kicker">Current / ${incident.id}</div><h3>${html(incident.title)}</h3><p class="mono">${incident.fingerprint}</p><p>Suggested priority: ${priority(incident)}</p><p>${html(result.cause)}</p></section>
+    <section class="panel"><div class="kicker">Previous / ${record.id}</div><h3>${html(record.title)}</h3><p class="mono">${record.fingerprint}</p><p>${record.priority} · ${html(record.responder)}</p><p>${html(record.fix || 'The responder did not document a fix.')}</p>${ref(record.id)}</section></div>`;
+}
+
+function desk() {
+  const queue = workspace.active.map(byId).filter(Boolean).sort((a,b)=>incidentPriority(a).localeCompare(incidentPriority(b)));
+  const incident = byId(selected) || queue[0];
+  const result = investigate(incident,cutoff);
+  const content = {brief:()=>brief(incident,result), details:()=>caseDetails(incident,result), runbook:()=>incidentRunbooks(result), trace:()=>trace(result), replay:()=>replay(incident,result), compare:()=>compare(incident,result)};
+  return `<section class="hero intro"><div><div class="kicker">On-call desk / Brampton AI Innovator</div><h1>THE INCIDENT <em>DESK.</em></h1><p>Review alerts, follow the evidence, and get an engineer on the case.</p></div>
+    <div class="radar" aria-hidden="true"><i style="--size:56px"></i><i style="--size:107px"></i><i style="--size:154px"></i><b style="--x:43%;--y:37%"></b><b style="--x:73%;--y:59%"></b><b style="--x:57%;--y:74%"></b><span class="mono">DEMO SIGNAL</span></div></section>
+    <div class="stats"><div class="stat"><strong>${services.length}</strong><small>Services monitored</small></div><div class="stat"><strong>${queue.length}</strong><small>Active incidents</small></div>
+    <div class="stat"><strong>${queue.filter(item=>incidentPriority(item)==='P1').length}</strong><small>Urgent incidents</small></div><div class="stat"><strong>${history.length}</strong><small>Archived incidents</small></div></div>
+    <div class="desk">
+      <aside class="queue"><div class="section-top"><h2>Alert queue</h2><span class="badge neutral">SIMULATION</span></div>
+      ${queue.map(item=>`<button class="queue-item" data-case="${item.id}" aria-pressed="${item.id===selected}"><span class="row"><span>${badge(incidentPriority(item))} <small>${severityNames[incidentPriority(item)]}</small></span><small class="mono">${item.alert} ET</small></span><strong>${html(item.title)}</strong><small>${html(item.service)} · ${item.variant}</small></button>`).join('')}
+      <div class="simulate"><div class="simulate-head"><span class="kicker">Simulate an alert</span><button class="small" data-reset>Reset</button></div>
+      <p class="small quiet" data-auto-telegram-hint>${automaticTelegram?'New simulations automatically send to Telegram.':'Simulations stay in the dashboard while Telegram automation is off.'}</p>
+      <div class="buttons">${scenarios.map(item=>`<button class="small" data-trigger="${item.id}">${item.variant}</button>`).join('')}</div></div></aside>
+      <article class="case"><div class="case-head"><div class="case-top"><span class="case-meta">${incident.id} / ${html(incident.service)} / ${incident.alert} ET</span><div class="actions"><button class="small" data-handoff>Draft handoff</button><button class="primary small" data-assistant>✳ Ask assistant</button></div></div>
+      <h2>${html(incident.title)}</h2><div class="row"><p>${badge(incidentPriority(incident))} <small>${incident.variant}${cutoff === '23:59' ? '' : ' · Replay through ' + cutoff + ' ET'}</small></p><button class="small" data-priority>Change priority</button></div></div>
+      ${taskBar(incident)}
+      <div class="tabs" role="group" aria-label="Incident details">${tabs.map(([key,label])=>`<button class="tab" data-tab="${key}" aria-pressed="${key===activeTab}">${label}</button>`).join('')}</div>
+      <div class="case-content" id="case-content">${content[activeTab]()}</div></article>
+    </div>`;
+}
+
+function layout(title, detail, content, search = false) {
+  return `<section class="page intro"><div class="page-hero"><div><div class="kicker">Incident Compass / Demo workspace</div><h1>${title}</h1><p>${detail}</p></div>
+    ${search ? '<input id="search" type="search" aria-label="Filter records" placeholder="Filter records…">' : ''}</div>${content}</section>`;
+}
+function serviceList() {
+  return services.filter(service=>`${service.name} ${service.group}`.toLowerCase().includes(query)).map(service=>{
+    const confirmed = workspace.active.map(byId).find(incident=>incident.confirmed.includes(service.name));
+    const possible = workspace.active.map(byId).find(incident=>incident.possible.includes(service.name));
+    return `<button data-service="${html(service.name)}"><small class="mono">${service.group}</small><strong>${html(service.name)}</strong><small>${confirmed ? '● Incident confirmed' : possible ? '◌ Possible impact' : '○ No active alert'}</small></button>`;
+  }).join('') || '<p>No services match the filter.</p>';
+}
+function historyList() {
+  return history.filter(record=>Object.values(record).join(' ').toLowerCase().includes(query)).map(record=>`<li class="row"><div><span class="mono quiet">${record.date} · ${record.id}</span><h3>${html(record.title)}</h3><p>${html(record.service)} · ${html(record.responder)} · ${record.fix ? 'Fix documented' : 'Fix missing'}</p></div><div>${badge(record.priority)} ${ref(record.id)}</div></li>`).join('') || '<li>No incidents match the filter.</li>';
+}
+function documentList() {
+  return documents.filter(document=>[document.id,document.title,document.service,document.kind,document.useWhen,document.incident].join(' ').toLowerCase().includes(query)).map(document=>`
+    <li class="row"><div><span class="mono quiet">${html(document.id)} · ${html(document.kind)}</span><h3>${html(document.title)}</h3><p>${html(document.service)} · ${html(document.owner)}</p></div>${documentLink(document)}</li>
+  `).join('') || '<li>No procedures match the filter.</li>';
+}
+function calendar() {
+  const recent = scenarios.flatMap(incident=>incident.events.filter(event=>['Change','Maintenance'].includes(event.kind)).map(event=>({...event,service:incident.service}))).sort((a,b)=>b.time.localeCompare(a.time));
+  const records = [
+    ...history.map(record=>({...record,kind:'Archived incident'})),
+    ...recent.map(record=>({...record,date:'Nov 21'})),
+    ...upcoming,
+  ];
+  const month = ['Sep','Oct','Nov'][calendarMonth-8];
+  const monthName = ['September','October','November'][calendarMonth-8];
+  const visible = records.filter(record=>record.date.startsWith(month + ' '));
+  const byDay = day => visible.filter(record=>record.date === `${month} ${String(day).padStart(2,'0')}`);
+  const firstDay = new Date(Date.UTC(2026,calendarMonth,1)).getUTCDay();
+  const days = new Date(Date.UTC(2026,calendarMonth+1,0)).getUTCDate();
+  const grid = Array.from({length:days},(_,index)=>{
+    const day = index+1;
+    const count = byDay(day).length;
+    return `<button data-calendar-day="${day}" aria-pressed="${day===calendarDay}" aria-label="${monthName} ${day}, ${count} records">${day}${count ? `<span class="calendar-count">${count}</span>` : ''}</button>`;
+  }).join('');
+  const items = (calendarDay ? byDay(calendarDay) : visible).sort((a,b)=>
+    Number(a.date.slice(4))-Number(b.date.slice(4)) || (a.time || '').localeCompare(b.time || '')
+  ).map(record=>`<li class="row"><div><span class="mono">${record.date}${record.time ? ' · ' + record.time + ' ET' : ''}</span><br><strong>${html(record.title)}</strong><br><small>${html(record.service)} · ${record.kind}</small></div>${record.id ? ref(record.id) : ''}</li>`).join('');
+  return layout('Change calendar.','Browse archived incidents, releases, and scheduled maintenance.',`<div class="duo">
+    <section class="panel"><div class="row"><h2>${monthName} 2026</h2><label><span class="sr-only">Calendar month</span><select id="calendar-month">${['September','October','November'].map((value,index)=>`<option value="${index+8}" ${index+8===calendarMonth?'selected':''}>${value}</option>`).join('')}</select></label></div>
+    <div class="calendar-grid" role="group" aria-label="${monthName} 2026 dates">${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(day=>`<small>${day}</small>`).join('')}${'<span></span>'.repeat(firstDay)}${grid}</div></section>
+    <section class="panel"><div class="row"><h2>${calendarDay ? monthName + ' ' + calendarDay : 'Month agenda'}</h2>${calendarDay ? '<button class="small" data-calendar-all>Show month</button>' : ''}</div><ul class="archive">${items || '<li>No records on this date.</li>'}</ul></section></div>`);
+}
+function chat() {
+  const records = workspace.messages.map(message=>{
+    const incident = byId(message.id);
+    const available = workspace.tasks[message.id]?.status === 'open';
+    const time = new Date(message.time).toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'2-digit',minute:'2-digit'});
+    return `<li><small class="mono">${html(time)} ET · ${message.type === 'open' ? 'INCIDENT COMPASS / @TEAM' : 'OWNERSHIP CONFIRMED'}</small>
+      ${message.type === 'open' ? `<h3>Unclaimed at escalation: ${incident.title}</h3><p>${html(message.reason)} · ${incident.id} · P1 · ${incident.service}</p>` : `<p><strong>${html(message.by)}</strong> accepted ${message.id}.</p>`}
+      <div class="buttons"><button data-open-case="${incident.id}" class="small">Open incident</button>
+      ${message.type === 'open' && available ? `<button class="small primary" data-task="claim" data-id="${incident.id}">Claim as ${html(actor)}</button>` : ''}</div></li>`;
+  }).join('');
+  return layout('# General.','Simulated team chat. Switch teammates at the top to test the handoff.',`<ul class="channel">${records || '<li>No escalations. Page an engineer from the urgent incident to try it.</li>'}</ul>`);
+}
+
+function alertInbox() {
+  const incidents = workspace.active.map(byId).filter(Boolean).sort((a,b)=>incidentPriority(a).localeCompare(incidentPriority(b)));
+  const cards = incidents.filter(item=>alertFilter==='all' || incidentPriority(item)===alertFilter).map(incident=>{
+    const level=incidentPriority(incident);
+    const alerts=incident.events.filter(event=>event.kind==='Alert');
+    const task=workspace.tasks[incident.id];
+    const status=task?.status==='claimed' ? 'Accepted by ' + task.by : task?.status==='open' ? 'Waiting for a team claim'
+      : task?.status==='pending' ? 'Waiting for acknowledgement' : 'Needs review';
+    return `<li class="alert-card ${level}"><div class="row"><span class="badge ${level}">${level} · ${severityNames[level]}</span><small class="mono">${incident.id} · ${incident.alert} ET</small></div>
+      <h2>${html(incident.title)}</h2><p>${html(incident.service)} · ${incident.affectedPct}% affected in sample</p>
+      <div class="references alert-sources" aria-label="Source alerts">${alerts.map(event=>ref(event.id)).join('')}</div>
+      <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button><button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button></div></div></li>`;
+  }).join('');
+  const stats = [['all','All alerts'],...levels.map(level=>[level,level+' '+severityNames[level]])].map(([level,label])=>
+    `<button class="small" aria-pressed="${alertFilter===level}" data-alert-filter="${level}">${label} (${level==='all' ? incidents.length : incidents.filter(item=>incidentPriority(item)===level).length})</button>`
+  ).join('');
+  return layout('Alert inbox.','Review alerts by urgency, open their evidence, and preview outgoing messages.',`
+    <div class="row"><div class="buttons" role="group" aria-label="Filter by urgency">${stats}</div><div class="buttons"><span class="badge neutral" data-auto-telegram-badge>Telegram auto: ${automaticTelegram?'on':'off'}</span><button class="small" data-telegram-routing>Telegram routing</button><button class="small" data-channels>Delivery setup</button></div></div>
+    <ul class="alert-list">${cards || '<li>No alerts at this urgency level.</li>'}</ul>`);
+}
+
+function render() {
+  const page = view();
+  const focused = document.activeElement;
+  const focusKeys = focused && main.contains(focused) ? [...focused.attributes].filter(attribute=>attribute.name.startsWith('data-')) : [];
+  const content = {
+    desk, calendar, chat, alerts:alertInbox,
+    services:()=>layout('Service inventory.','The 30 fictional cloud services in this workspace.',`<div class="service-grid" id="list">${serviceList()}</div>`,true),
+    history:()=>layout('Incident archive.','Compare previous causes, owners, priorities and documented fixes.',`<ul class="archive" id="list">${historyList()}</ul>`,true),
+    runbooks:()=>layout('Runbook library.','Search the sample database for service procedures, recovery checks, and investigation guides.',`<ul class="archive" id="list">${documentList()}</ul>`,true)
+  };
+  main.innerHTML = content[page]();
+  document.querySelectorAll('[data-view]').forEach(link=> {
+    if (link.dataset.view === page) link.setAttribute('aria-current','page');
+    else link.removeAttribute('aria-current');
+  });
+  const count = Object.values(workspace.tasks).filter(task=>task.status==='open').length;
+  const countLabel = document.querySelector('#chat-count');
+  countLabel.hidden = !count;
+  countLabel.textContent = count;
+  document.querySelector('#notifications').textContent = workspace.notifications?.length ? `Notifications (${workspace.notifications.length})` : 'Notifications';
+  const search = document.querySelector('#search');
+  if (search) search.value = query;
+  if (focusKeys.length) {
+    const selector = focusKeys.map(key=>`[${key.name}="${CSS.escape(key.value)}"]`).join('');
+    main.querySelector(selector)?.focus({preventScroll:true});
+  }
+}
+
+function choose(id) {
+  if (assistantWindow.open) assistantWindow.close();
+  selected = id;
+  activeTab = 'brief';
+  cutoff = '23:59';
+}
+function openDialog(kicker,title,content) {
+  dialog.innerHTML = `<div class="dialog-head"><div><div class="kicker">${html(kicker)}</div><h2 id="dialog-title">${html(title)}</h2></div><button data-close aria-label="Close dialog">✕</button></div><div class="dialog-body">${content}</div>`;
+  if (!dialog.open) dialog.showModal();
+}
+function source(id) {
+  const document = documents.find(item=>item.id===id);
+  if (document) {
+    openDialog(document.kind + ' / ' + id,document.title,`
+      <p><small>${html(document.service)} · Owner: ${html(document.owner)} · Updated ${html(document.updated)} · Sample database</small></p>
+      <p><strong>When to use it</strong><br>${html(document.useWhen)}</p>
+      <ol class="archive">${document.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
+      <p><strong>When to pause</strong><br>${html(document.stopWhen)}</p>
+      <p><strong>How to verify recovery</strong><br>${html(document.verify)}</p>
+      ${document.incident ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}`);
+    return;
+  }
+  const record = history.find(item=>item.id===id);
+  if (record) {
+    const procedure = documents.find(item=>item.incident===record.id);
+    openDialog('Incident archive / ' + id,record.title,`<p>${html(record.service)} · ${record.date} · ${record.priority} · ${html(record.responder)}</p>
+      <p><strong>Prior cause</strong><br>${html(record.cause)}</p><p><strong>Documented resolution</strong><br>${html(record.fix || 'No resolution steps recorded.')}</p>
+      ${procedure ? `<div class="block">${documentLink(procedure)}</div>` : '<p class="quiet">No runbook is linked to this archive record.</p>'}`);
+    return;
+  }
+  const event = scenarios.flatMap(item=>item.events).find(item=>item.id===id);
+  if (event) openDialog(event.kind + ' / ' + id,event.title,`<p>${html(event.detail)}</p><p class="mono">Occurred ${event.time} ET · Available ${event.seen} ET</p>`);
+}
+function draft() {
+  const incident = byId(selected);
+  const result = investigate(incident,cutoff);
+  if (!result.observed) {
+    openDialog('Draft handoff',incident.title,'<p>No incident brief exists at this point in the replay.</p>');
+    return;
+  }
+  const note = [
+    `${incident.id} · ${incident.title} · ${incidentPriority(incident)}`,
+    `Owner: ${workspace.tasks[incident.id]?.by || 'Not confirmed'}`,
+    `Working hypothesis: ${result.cause}`,
+    `Evidence: ${incident.causeSources.join(', ')}`,
+    result.alternative && `Alternative: ${incident.alternative} [${result.alternative.id}]`,
+    `Next check: ${incident.next}`,
+    result.guide && `Documentation: ${result.guide.id} · ${result.guide.title}`,
+    `Recovery check: ${incident.verify}`,
+    'Confirmed cause and actual resolution: [Engineer to complete]'
+  ].filter(Boolean).join('\n');
+  const draftKey = incident.id + '/' + cutoff;
+  const saved = workspace.notes?.[draftKey];
+  openDialog('Draft handoff',incident.title,`<label for="draft-note">Review and add what the engineer confirmed</label><textarea id="draft-note" maxlength="2500" rows="11">${html(saved ?? note)}</textarea>
+    <div class="buttons"><button class="small primary" data-save-note="${draftKey}">Save draft</button><button class="small" data-copy>Copy draft</button></div>`);
+}
+
+function showNotifications() {
+  const entries = (workspace.notifications || []).map(entry=>{
+    const level=levels.includes(entry.level) ? entry.level : incidentPriority(byId(entry.id));
+    return `<li><div class="row"><strong>${html(entry.title)}</strong><span class="badge ${level}">${level} · ${severityNames[level]}</span></div>
+    <p>${html(entry.description)}</p><button class="small" data-open-case="${html(entry.id)}">Open ${html(entry.id)}</button></li>`;
+  }).join('');
+  openDialog('Demo workspace','Notifications',`<p class="quiet">Simulated in-app alert and handoff activity.</p>
+    <ul class="archive">${entries || '<li>Trigger a sample alert to see it here.</li>'}</ul>`);
+}
+
+async function deliveryApi(action,payload) {
+  if (!location.protocol.startsWith('http')) throw Error('Start the local server to configure or preview external delivery.');
+  const options=payload ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)} : {};
+  const response=await fetch('/api/alerts/'+action,options);
+  const data=await response.json();
+  if (!response.ok) throw Error(data.error || 'Delivery service unavailable.');
+  return data;
+}
+
+function deliveryLog(entries) {
+  if (!entries?.length) return '<p class="quiet">No provider submissions in this server session.</p>';
+  const states={accepted:'Accepted by provider',rejected:'Rejected by provider',unknown:'Outcome unknown',duplicate:'Recently submitted'};
+  return `<ul class="archive">${entries.map(entry=>`<li><div class="row"><strong>${html(channelSetup[entry.channel].name)} · ${html(entry.destination)}</strong><span class="badge neutral">${states[entry.status]}</span></div>
+    <small>${html(entry.incident || '')} ${html(entry.level || '')}${entry.http ? ' · HTTP ' + entry.http : ''}</small>
+    ${entry.incident ? `<button class="small delivery-open" data-open-case="${html(entry.incident)}">Open incident</button>` : ''}</li>`).join('')}</ul>`;
+}
+
+function deliveryError(error) {
+  const status=dialog.querySelector('[data-delivery-status]');
+  if (status) status.textContent=error.message.startsWith('Unexpected') ? 'The local delivery service could not respond.' : error.message;
+}
+
+async function showChannels() {
+  deliveryPreview=undefined;
+  openDialog('Alert delivery','Delivery setup','<p data-delivery-status role="status">Checking local settings…</p>');
+  const target=dialog.querySelector('[data-delivery-status]');
+  try {
+    deliveryState=await deliveryApi('status');
+    if (!dialog.open || !target.isConnected) return;
+    openDialog('Alert delivery','Delivery setup',`<p>Provider settings stay on this computer. Saving them makes no external request.</p>
+      <div class="delivery-channels">${Object.entries(channelSetup).map(([key,channel])=>{
+        const status=deliveryState.channels[key];
+        return `<section class="panel"><div class="row"><h3>${channel.name} · ${channel.provider}</h3>
+          <span class="badge neutral">${status.configured ? 'Configured' : 'Needs setup'}</span></div>
+          <p><small>${status.recipients.length ? status.recipients.map(item=>html(item.destination)).join(' · ') : 'No destination configured'}</small></p>
+          <div class="buttons"><button class="small" data-provider="${key}">${status.configured ? 'Update' : 'Configure'} ${channel.name}</button>
+            ${status.configured ? `<button class="small" data-check-provider="${key}">Check connection</button>` : `<a class="small" target="_blank" rel="noreferrer" href="${channel.setup}">Open ${key==='telegram'?'BotFather':channel.provider}</a>`}
+            ${key==='telegram'?'<button class="small" data-telegram-routing>Team routing</button>':''}</div>
+          <p class="small quiet" id="check-${key}" role="status"></p></section>`;
+      }).join('')}</div><h3 class="block">Recent provider submissions</h3>${deliveryLog(deliveryState.deliveries)}`);
+  } catch(error) { if (target.isConnected) deliveryError(error); }
+}
+
+const routeLabels = {
+  'queued-private':'Private page queued','sending-private':'Sending private page','waiting':'Waiting for private response',
+  'queued-team':'Team post queued','sending-team':'Posting to team group','open-team':'Posted to team · Awaiting claim',
+  accepted:'Accepted',failed:'Delivery needs review'
+};
+function routeDetails(route) {
+  const deadline=route.stage==='waiting'&&route.deadline ? `<p>Reply by <strong>${html(new Date(route.deadline).toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'2-digit',minute:'2-digit',second:'2-digit'}))} ET</strong></p>` : '';
+  const reason={critical:'Sent directly to the group because this alert is P1 Critical.',decline:'The private responder declined.',timeout:'The private response window expired.',unavailable:'Telegram did not confirm the private page.'}[route.reason];
+  return `<p><strong>${html(routeLabels[route.stage])}</strong>${route.acceptedBy?' · '+html(route.acceptedBy):''}</p>${deadline}
+    ${reason?`<p>${html(reason)}</p>`:''}${route.notice?`<p>${html(route.notice)}</p>`:''}`;
+}
+
+async function showTelegramRouting() {
+  openDialog('Alert delivery','Telegram routing','<p data-delivery-status role="status">Checking routing settings…</p>');
+  const anchor=dialog.querySelector('[data-delivery-status]');
+  try {
+    const info=await deliveryApi('telegram-routing');
+    setAutomaticIndicator(info.auto.enabled);
+    if(!dialog.open||!anchor.isConnected)return;
+    openDialog('Alert delivery','Telegram routing',`<p><strong>P1 Critical</strong> goes directly to the team group. <strong>P2 High</strong> and <strong>P3 Monitor</strong> go to a private responder first.</p>
+      <div class="panel"><div class="row"><h3>Automatic Telegram alerts</h3><span class="badge ${info.auto.enabled?'P2':'neutral'}">${info.auto.enabled?'On':'Off'}</span></div>
+      <p>New alert events use these settings. Opening an incident, adjusting priority, or resetting the demo does not trigger a send.</p>
+      <form class="delivery-form" data-auto-telegram>
+        <label for="automatic-responder">Default private responder</label>
+        <select id="automatic-responder" name="owner">${info.people.map(person=>`<option value="${html(person.id)}" ${person.id===info.auto.owner?'selected':''}>${html(person.label)}</option>`).join('')||'<option value="">No responder paired</option>'}</select>
+        <label for="automatic-wait">Response timeout</label>
+        <select id="automatic-wait" name="wait">${[[30,'30 seconds'],[60,'1 minute'],[120,'2 minutes'],[300,'5 minutes']].map(([seconds,label])=>`<option value="${seconds}" ${seconds===info.auto.wait?'selected':''}>${label}</option>`).join('')}</select>
+        <div class="buttons"><button class="small primary" type="submit" ${info.team&&info.people.length?'':'disabled'}>${info.auto.enabled?'Save automatic routing':'Enable automatic routing'}</button>
+        ${info.auto.enabled?'<button class="small" type="button" data-disable-auto-telegram>Turn off automatic routing</button>':''}</div>
+        <p data-auto-status role="status"></p></form></div>
+      <div class="panel"><div class="row"><h3>Team group</h3><button class="small" data-pair-team ${info.botConnected?'':'disabled'}>${info.team?'Replace team group':'Pair team group'}</button></div>
+      <p>${info.team?`${html(info.team.label)} · ${html(info.team.destination)}`:'A group is needed for escalation and critical alerts.'}</p></div>
+      <div class="panel block"><div class="row"><h3>Private responders</h3><button class="small" data-pair-responder ${info.botConnected?'':'disabled'}>Pair a responder</button></div>
+      ${info.people.length?`<ul class="archive">${info.people.map(person=>`<li>${html(person.label)} · ${html(person.destination)}</li>`).join('')}</ul>`:'<p>No private chats have been paired.</p>'}
+      <div class="block"><h3>Shared responder link</h3><p>Share it with people in the group. When they tap <strong>Start</strong>, the bot verifies membership and adds them to the private responder list. Team alerts will include the link.</p>
+      ${info.enrollment?`<p><a id="team-responder-link" href="${html(info.enrollment.url)}" target="_blank" rel="noreferrer">Open responder enrollment</a></p>
+      <div class="buttons"><button class="small" type="button" data-copy-enrollment>Copy responder link</button><button class="small" type="button" data-refresh-responders>Refresh responders</button><button class="small" type="button" data-create-enrollment="reset">Replace link</button></div>`
+      :`<button class="small" type="button" data-create-enrollment="new" ${info.team?'':'disabled'}>Create shared responder link</button>`}
+      <p data-enrollment-status role="status"></p></div></div>
+      ${info.botConnected?'':'<p>Connect the bot in Delivery setup first.</p>'}
+      <section class="block"><h3>Recent routes</h3><ul class="archive">${info.routes.map(route=>`<li><div class="row"><strong>${html(route.incident)} · ${html(route.level)}</strong><button class="small" data-route-status="${html(route.id)}">Track route</button></div>${routeDetails(route)}</li>`).join('')||'<li>No routes started.</li>'}</ul></section>
+      <button class="small" data-channels>Delivery setup</button>`);
+  }catch(error){if(anchor.isConnected)deliveryError(error);}
+}
+
+async function updateTelegramMode(input,button) {
+  const target=dialog.querySelector('[data-auto-status]');
+  button.disabled=true;
+  target.textContent='Saving automatic routing…';
+  try {
+    const result=await deliveryApi('telegram-automatic',input);
+    setAutomaticIndicator(result.enabled);
+    if(target.isConnected&&dialog.open)void showTelegramRouting();
+  }catch(error){if(target.isConnected){target.textContent=error.message;button.disabled=false;}}
+}
+
+function setAutomaticIndicator(enabled) {
+  automaticTelegram=enabled===true;
+  const badge=main.querySelector('[data-auto-telegram-badge]');
+  const hint=main.querySelector('[data-auto-telegram-hint]');
+  if(badge)badge.textContent='Telegram auto: '+(automaticTelegram?'on':'off');
+  if(hint)hint.textContent=automaticTelegram?'New simulations automatically send to Telegram.':'Simulations stay in the dashboard while Telegram automation is off.';
+}
+
+function refreshAutomaticIndicator() {
+  if(location.protocol.startsWith('http'))void deliveryApi('telegram-routing').then(info=>setAutomaticIndicator(info.auto.enabled)).catch(()=>{});
+}
+
+async function createEnrollment(button) {
+  const target=dialog.querySelector('[data-enrollment-status]');
+  button.disabled=true;
+  target.textContent='Preparing the shared link…';
+  try{
+    await deliveryApi('telegram-enrollment',{reset:button.dataset.createEnrollment==='reset'});
+    if(target.isConnected&&dialog.open)void showTelegramRouting();
+  }catch(error){if(target.isConnected){target.textContent=error.message;button.disabled=false;}}
+}
+
+async function relayNewAlert(incident,level) {
+  if(!location.protocol.startsWith('http'))return;
+  try {
+    const result=await deliveryApi('telegram-alert-event',{event:crypto.randomUUID(),incident:incident.id,level});
+    if(result.status==='queued')notice(`Telegram route queued for ${incident.id}.`);
+    else if(result.status==='duplicate')notice(`Telegram already has a route for ${incident.id}.`);
+  }catch(error){notice('Telegram auto routing: '+error.message);}
+}
+
+function pairRouteDestination(mode) {
+  const team=mode==='team';
+  openDialog('Telegram routing',team?'Pair the team group':'Pair a private responder',`<form class="delivery-form" data-route-pair="${mode}">
+    <p>${team?'Add the existing Incident Compass bot to your Telegram team group. The pairing command identifies the group.':'Name the responder and share the generated one-time link with them. They tap Start in the private bot chat.'}</p>
+    ${team?'':'<label for="pager-name">Responder name</label><input id="pager-name" name="label" required maxlength="65">'}
+    <div class="buttons"><button class="small primary" type="submit">Create pairing link</button><button class="small" type="button" data-telegram-routing>Back</button></div>
+    <div data-route-pairing></div><p data-delivery-status role="status"></p></form>
+    ${team?`<details class="panel block"><summary>Bot already added? Verify by group ID</summary>
+      <form class="delivery-form" data-verify-team>
+        <label for="telegram-team-id">Group ID or public @username</label><input id="telegram-team-id" name="chat" maxlength="64" required placeholder="For Telegram Web, use the negative number after #">
+        <div class="buttons"><button class="small primary" type="submit">Verify and pair group</button></div><p data-team-result role="status"></p>
+      </form></details>`:''}`);
+}
+
+async function startRoutePair(form) {
+  const mode=form.dataset.routePair;
+  const anchor=form.querySelector('[data-route-pairing]');
+  const status=form.querySelector('[data-delivery-status]');
+  const submit=form.querySelector('[type=submit]');
+  submit.disabled=true;
+  status.textContent='Creating the pairing link…';
+  try {
+    const result=await deliveryApi('telegram-discover',{action:'start',mode,label:form.elements.label?.value});
+    if(!anchor.isConnected)return;
+    anchor.innerHTML=mode==='team'
+      ? `<div class="panel"><a target="_blank" rel="noreferrer" href="${html(result.url)}">Open Telegram and select the team group</a>
+         <p>If the bot is already in the group, post this command there:</p><p><code>${html(result.groupCommand)}</code></p></div>`
+      : `<div class="panel"><a target="_blank" rel="noreferrer" href="${html(result.url)}">One-time responder link</a><p>Have the intended responder open this link in their Telegram account and tap Start.</p></div>`;
+    status.textContent='Waiting for the pairing command in Telegram…';
+    for(let attempt=0;attempt<65;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,4000));
+      if(!anchor.isConnected||!dialog.open)return;
+      const match=await deliveryApi('telegram-discover',{action:'check',id:result.id});
+      if(!anchor.isConnected)return;
+      if(match.saved){
+        openDialog('Telegram routing','Destination paired',`<p>${html(match.detail)}</p><button class="small primary" data-telegram-routing>View Telegram routing</button>`);
+        return;
+      }
+    }
+    status.textContent='Pairing timed out. Create a fresh pairing link to try again.';
+  }catch(error){if(status.isConnected)status.textContent=error.message;}
+  finally{if(submit.isConnected)submit.disabled=false;}
+}
+
+async function reviewTelegramRoute(id) {
+  const incident=byId(id);
+  if(!incident)return;
+  openDialog(id,'Review Telegram route','<p data-delivery-status role="status">Loading paired chats…</p>');
+  const anchor=dialog.querySelector('[data-delivery-status]');
+  try {
+    const info=await deliveryApi('telegram-routing');
+    if(!dialog.open||!anchor.isConnected)return;
+    const level=incidentPriority(incident);
+    const direct=level==='P1';
+    openDialog(id,'Review Telegram route',`<p>${badge(level)} <strong>${html(incident.title)}</strong></p>
+      <p>${direct?'This critical alert skips the private page and posts directly to the group.':'A private page asks the responder to accept or decline. Decline or timeout posts to the group.'}</p>
+      <p><strong>Team group:</strong> ${html(info.team?.label||'Not paired')}</p>
+      <form class="delivery-form" data-routing-preview="${id}">
+        ${direct?'':`<label for="routing-owner">Private responder</label><select id="routing-owner" name="owner">${info.people.map(person=>`<option value="${html(person.id)}">${html(person.label)} · ${html(person.destination)}</option>`).join('')||'<option value="">No responder paired</option>'}</select>
+        <label for="routing-window">Response window</label><select id="routing-window" name="wait"><option value="30">30 seconds</option><option value="60" selected>1 minute</option><option value="120">2 minutes</option><option value="300">5 minutes</option></select>`}
+        <div class="buttons"><button class="small primary" type="submit">Preview Telegram route</button><button class="small" type="button" data-telegram-routing>Routing setup</button></div>
+        <p data-delivery-status role="status"></p></form>`);
+  }catch(error){if(anchor.isConnected)deliveryError(error);}
+}
+
+function previewTelegramRoute(incident,preview) {
+  openDialog(incident,'Preview Telegram route',`
+    ${preview.messages.map(message=>`<section class="panel block"><h3>${html(message.destination)}</h3><p class="chat-answer">${html(message.body)}</p></section>`).join('')}
+    ${preview.canStart?`<p>${preview.direct?`Send to <strong>${html(preview.team)}</strong> now.`:`Page <strong>${html(preview.owner)}</strong> now. Send to <strong>${html(preview.team)}</strong> if the responder declines or misses the deadline.`}</p>`:`<p><strong>${html(preview.missing)}</strong></p>`}
+    <div class="buttons"><button class="small" data-route-incident="${html(incident)}">Back</button>
+    ${preview.canStart?`<button class="small primary" data-start-route="${html(preview.token)}">Confirm and start live routing</button>`:'<button class="small" data-telegram-routing>Routing setup</button>'}</div><p data-delivery-status role="status"></p>`);
+}
+
+async function trackTelegramRoute(id,initial) {
+  openDialog('Telegram routing','Track Telegram route',`<div data-route-tracking role="status">${initial?routeDetails(initial):'Checking route…'}</div><button class="small" data-telegram-routing>All routes</button>`);
+  const slot=dialog.querySelector('[data-route-tracking]');
+  try {
+    while(dialog.open&&slot.isConnected){
+      const state=await deliveryApi('telegram-routing');
+      if(!slot.isConnected)return;
+      const route=state.routes.find(item=>item.id===id);
+      if(!route){slot.textContent='This route is no longer in the recent list.';return;}
+      const detail=routeDetails(route);
+      if(slot.innerHTML!==detail)slot.innerHTML=detail;
+      if(['accepted','failed'].includes(route.stage))return;
+      await new Promise(resolve=>setTimeout(resolve,3000));
+    }
+  }catch(error){if(slot.isConnected)slot.textContent=error.message;}
+}
+
+function providerForm(key) {
+  const channel=channelSetup[key];
+  if (!channel) return;
+  const saved=deliveryState?.channels[key].savedFields || [];
+  const guidance={
+    sms:'Use a Twilio account and an SMS-capable sender that can send custom texts to Canadian numbers. Enter the sender in international format, including the +.',
+    email:'Verify a domain you control in Resend, then create a sending-access API key for that domain and enter a sender address on it.',
+    telegram:'Paste your BotFather token and select Pair and save my chat. Incident Compass will save and verify the connection after you tap Start in your private chat with the bot.',
+  };
+  openDialog(channel.provider,'Configure ' + channel.name,`<p>${guidance[key]}</p>
+    <p><a target="_blank" rel="noreferrer" href="${channel.setup}">Open ${key==='telegram'?'BotFather':channel.provider}</a>
+    ${key==='email'?' · <a target="_blank" rel="noreferrer" href="https://resend.com/domains">Verified domains</a>':''}</p>
+    <form class="delivery-form" data-provider-form="${key}" autocomplete="off">
+      ${channel.fields.map(([id,label,masked])=>`<label for="${id}">${label}${saved.includes(id) ? ' · Saved; leave blank to keep' : ''}</label>
+      <input id="${id}" name="${id}" type="${masked?'password':'text'}" maxlength="180" autocomplete="off" ${saved.includes(id) ? '' : 'required'}>`).join('')}
+      ${key==='telegram'?'<div class="buttons"><button class="small primary" type="button" data-pair-personal>Pair and save my chat</button><button class="small" type="button" data-find-chat>Find chat ID manually</button></div><div id="telegram-pairing"></div>':''}
+      <p data-delivery-status role="status"></p>
+      <div class="buttons"><button class="small primary" type="submit">Save settings</button><button class="small" type="button" data-channels>Back</button></div>
+    </form>`);
+}
+
+async function checkProvider(key) {
+  const output=dialog.querySelector('#check-'+key);
+  if (!output) return;
+  output.textContent='Checking the provider without sending…';
+  try {
+    const result=await deliveryApi('check',{channel:key});
+    if (output.isConnected) output.textContent=result.detail;
+  } catch(error) { if (output.isConnected) output.textContent=error.message; }
+}
+
+async function discoverTelegram(id,personal=false) {
+  const pairing=dialog.querySelector('#telegram-pairing');
+  const chatField=dialog.querySelector('#TELEGRAM_CHAT_ID');
+  if (!pairing || !chatField) return;
+  const action=id ? 'check' : 'start';
+  const token=dialog.querySelector('#TELEGRAM_BOT_TOKEN').value.trim();
+  const status=dialog.querySelector('[data-delivery-status]');
+  const pairButton=dialog.querySelector('[data-pair-personal]');
+  if(personal) pairButton.disabled=true;
+  status.textContent='Checking Telegram…';
+  try {
+    const result=await deliveryApi('telegram-discover',id ? {action,id} : {action,token,mode:personal?'personal':'manual'});
+    if (!pairing.isConnected) return;
+    if (action==='start') {
+      if (personal) {
+        dialog.querySelector('#TELEGRAM_BOT_TOKEN').value='';
+        pairing.innerHTML=`<div class="panel"><a href="${html(result.url)}" target="_blank" rel="noreferrer">Open your bot in Telegram</a>
+          <p>Tap Start in your private chat with this bot. Incident Compass will finish automatically.</p></div>`;
+        status.textContent='Waiting for you to tap Start in Telegram…';
+        void waitForTelegramPairing(result.id,pairing.firstElementChild,status,pairButton);
+        return;
+      }
+      pairing.innerHTML=`<div class="panel"><p>For a direct chat, <a href="${html(result.url)}" target="_blank" rel="noreferrer">open your bot and click Start</a>.</p>
+        <p>For a group, add the bot, then post this command yourself in that group:</p><p><code>${html(result.groupCommand)}</code></p>
+        <button type="button" class="small" data-check-chat="${html(result.id)}">Look for chat</button></div>`;
+      status.textContent='After sending the pairing command in Telegram, click Look for chat.';
+    } else if (result.found) {
+      chatField.value=result.chatId;
+      pairing.replaceChildren();
+      status.textContent='Chat found. Click Save settings to use it.';
+    } else {
+      status.textContent='Pairing command not found yet. Send it in the intended chat, then check again.';
+    }
+  } catch(error) {
+    if(status.isConnected) status.textContent=error.message;
+    if(personal && pairButton.isConnected) pairButton.disabled=false;
+  }
+}
+
+async function waitForTelegramPairing(id,session,status,pairButton) {
+  try {
+    for(let attempt=0;attempt<65;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,4000));
+      if(!session.isConnected || !dialog.open) return;
+      const result=await deliveryApi('telegram-discover',{action:'check',id});
+      if(!session.isConnected || !dialog.open) return;
+      if(result.saved){
+        openDialog('Telegram delivery','Telegram connected',`<p>${html(result.detail)}</p><button class="small primary" data-channels>View delivery setup</button>`);
+        return;
+      }
+    }
+    if(status.isConnected) status.textContent='Pairing timed out. Paste the token again to start a new session.';
+  } catch(error){
+    if(status.isConnected) status.textContent=error.message;
+  } finally {
+    if(pairButton.isConnected) pairButton.disabled=false;
+  }
+}
+
+async function reviewDelivery(id) {
+  const incident=byId(id);
+  if (!incident) return;
+  deliveryPreview=undefined;
+  openDialog(incident.id,'Review alert delivery','<p data-delivery-status role="status">Loading delivery channels…</p>');
+  const target=dialog.querySelector('[data-delivery-status]');
+  try {
+    deliveryState=await deliveryApi('status');
+    if (!dialog.open || !target.isConnected) return;
+    const level=incidentPriority(incident);
+    openDialog(incident.id,'Review alert delivery',`<p>${badge(level)} <strong>${severityNames[level]} · ${html(incident.title)}</strong></p>
+      <p>Select recipients, then review the exact message. Leave all boxes clear to preview the three channel formats.</p>
+      <form class="delivery-form" data-preview-form="${id}">
+        ${Object.entries(deliveryState.channels).map(([key,channel])=>`<fieldset><legend>${html(channel.name)} · ${channel.configured ? 'Configured' : 'Needs setup'}</legend>
+          ${channel.recipients.map(item=>`<label class="check-row"><input type="checkbox" name="target" value="${html(item.id)}"> ${html(item.label)} <small>${html(item.destination)}</small></label>`).join('') || '<small>No destination configured.</small>'}
+          ${channel.configured ? '' : ` <button class="small" type="button" data-provider="${key}">Configure ${html(channel.name)}</button>`}</fieldset>`).join('')}
+        <p data-delivery-status role="status"></p><div class="buttons"><button class="small primary" type="submit">Preview messages</button><button class="small" type="button" data-channels>Delivery setup</button></div>
+      </form>`);
+  } catch(error) { if (target.isConnected) deliveryError(error); }
+}
+
+function showDeliveryPreview(preview) {
+  deliveryPreview=preview;
+  openDialog(preview.incident,'Preview outgoing messages',`
+    <p><strong>${html(preview.level)} · ${severityNames[preview.level]}</strong> · Simulated incident</p>
+    ${Object.entries(preview.messages).map(([key,message])=>`<section class="panel block"><h3>${channelSetup[key].name}</h3>
+      <small>${preview.targets.filter(target=>target.channel===key).map(target=>html(target.destination)).join(' · ') || 'Format preview only'}</small>
+      ${message.subject ? `<p><strong>${html(message.subject)}</strong></p>` : ''}
+      <p class="chat-answer">${html(message.text)}</p></section>`).join('')}
+    <p data-delivery-status role="status">${preview.canSend ? 'Confirm to send these exact messages to the selected recipients.' : preview.targets.length ? 'Configure the selected providers before sending.' : 'No recipients selected. This preview sends nothing.'}</p>
+    <div class="buttons"><button class="small" data-deliver="${html(preview.incident)}">Back to recipients</button>
+      ${preview.canSend ? '<button class="small primary" data-send-delivery>Confirm and send live</button>' : ''}</div>`);
+}
+
+function changePriority() {
+  const incident = byId(selected);
+  openDialog(incident.id,'Change priority',`<p>Suggested priority: <strong>${priority(incident)}</strong>. Current priority: <strong>${incidentPriority(incident)}</strong>.</p>
+    <div class="buttons">${levels.map(level=>`<button data-set-level="${level}">${level}</button>`).join('')}<button data-set-level="suggested">Use suggested priority</button></div>`);
+}
+
+function fallback(incident,result,question) {
+  if (!result.observed) return 'The incident had not fired in this snapshot. Move the replay forward to see the brief.';
+  const q = question.toLowerCase();
+  if (/verif|recovery|resolved/.test(q) && result.guide) {
+    return `[${result.guide.id}] ${result.guide.verify}\n\n${incident.verify}`;
+  }
+  if (/distinguish|tell.*apart/.test(q)) {
+    const step = result.guide?.steps.find(([name])=>name.startsWith('Distinguish'));
+    return step ? `[${result.guide.id}] ${step[1]}` : incident.next;
+  }
+  if (/runbook|document|procedure|step|how (?:do|can|should|to)|what should i (?:do|check)|fix this/.test(q) && result.guide) {
+    const guide = result.guide;
+    const intro = result.verifiedDocument ? 'This runbook matches the documented previous fix. Verify that the current symptoms meet its preconditions.' : 'No verified fix exists for this alert. Use the guide to distinguish the possible causes.';
+    return [intro,`[${guide.id}] ${guide.title}`,...guide.steps.map(([name,step],index)=>`${index+1}. ${name}: ${step}`),`Pause if: ${guide.stopWhen}`,`Verify: ${guide.verify}`].join('\n\n');
+  }
+  if (/priorit|urgent|first|impact|cost|money/.test(q)) {
+    return `${incident.title} is ${priority(incident)}. The monitor shows ${incident.affectedPct}% of operations affected. Confirmed: ${incident.confirmed.join(', ')}. Check first: ${incident.next}`;
+  }
+  if (/before|past|similar|fix|compar/.test(q)) {
+    const record = result.exact[0] || result.nearby[0];
+    if (result.known) return `${result.known.responder} handled ${result.known.id}. The error signature matches. Previous resolution: ${result.known.fix}`;
+    return `No known fix for this alert.${record ? ' The nearest historical record is ' + record.id + (result.exact.length ? ', but its resolution steps are missing.' : ', with a different error signature.') : ''} ${incident.next}`;
+  }
+  if (/alternat|dissent|wrong|provider/.test(q)) return result.alternative ? `${incident.alternative} Source: ${result.alternative.id}. ${incident.next}` : 'The selected snapshot has no documented alternative cause. ' + incident.next;
+  if (/what changed|deploy|maintenance/.test(q)) return result.changes.map(item=>`${item.time} ET: ${item.title}. ${item.detail} [${item.id}]`).join('\n') || 'No recent changes were recorded in this snapshot.';
+  if (/summary|catch|happen|cause|detail|evidence/.test(q)) return [
+    result.cause,...result.findings.map(finding=>`• ${finding.text} [${finding.ids.join(', ')}]`),
+    `Still open: ${incident.unknowns[0]}`,`Next: ${incident.next}`,
+  ].join('\n\n');
+  return 'The demo can answer questions about priority, past fixes, recent changes, alternatives, or the incident summary. Try one of the prompts above.';
+}
+
+function assistant() {
+  if (assistantWindow.open) {
+    assistantWindow.querySelector('#question').focus();
+    return;
+  }
+  const incident = byId(selected);
+  assistantWindow.innerHTML = `<div class="dialog-head"><div><div class="kicker">Incident assistant / ${incident.id}</div><h2 id="assistant-title">Ask about this incident</h2></div><button data-close aria-label="Close assistant">✕</button></div><div class="dialog-body">
+    <p class="quiet" id="assistant-mode">${connected ? 'Gemini · Uses the selected evidence snapshot.' : 'Demo mode · Answers come from the sample records.'}</p>
+    <div class="buttons">${['What happened, in detail?', 'Which runbook should I use?', incident.document==='DG-023' ? 'What would distinguish the likely causes?' : 'Have we seen this before?', 'How should I verify recovery?'].map(q=>`<button class="small" data-prompt="${html(q)}">${html(q)}</button>`).join('')}</div>
+    <form id="assistant-form"><input id="question" aria-label="Ask the incident assistant" maxlength="400" placeholder="Ask about the evidence…" required>
+    <button class="primary" type="submit">Ask</button><button type="button" data-mic title="Speak a question using browser dictation">Mic</button></form>
+    <p class="quiet small" id="speech-status" role="status"></p>
+    <div id="answer-document"></div>
+    <div class="panel block"><details id="conversation-history" hidden><summary>Earlier questions and answers</summary><ul class="archive" id="conversation-turns"></ul></details><div class="row"><div class="references" id="answer-sources" aria-label="Sources cited in the answer"></div><button class="small" data-speak disabled>Read aloud</button></div><p class="chat-answer" id="answer" aria-live="polite">Choose a question or type your own.</p></div></div>`;
+  refreshAssistantDocument();
+  assistantWindow.show();
+}
+
+function refreshAssistantDocument() {
+  const holder = assistantWindow.querySelector('#answer-document');
+  if (!holder) return;
+  const result = investigate(byId(selected),cutoff);
+  holder.innerHTML = result.guide
+    ? `<small>${result.verifiedDocument ? 'Procedure for the matching incident' : 'Documentation for this investigation'}</small><div>${documentLink(result.guide)}</div>` : '';
+}
+
+async function ask(question, speak = false) {
+  const input = document.querySelector('#question');
+  const answer = document.querySelector('#answer');
+  const mode = document.querySelector('#assistant-mode');
+  const control = assistantWindow.querySelector('[data-speak]');
+  const sources = document.querySelector('#answer-sources');
+  if (!answer || !question.trim()) return;
+  input.value = question;
+  answer.textContent = 'Checking the incident records…';
+  control.disabled = true;
+  sources.replaceChildren();
+  const incident = byId(selected);
+  const snapshot = cutoff;
+  const scope = incident.id + '/' + snapshot;
+  if (scope !== conversationScope) {
+    conversation = [];
+    conversationScope = scope;
+  }
+  const result = investigate(incident,snapshot);
+  const revision = ++dialogRevision;
+  let reply = fallback(incident,result,question);
+  let ids = [...new Set(reply.match(/\b(?:INC|RB|DG|ALT|CHG|LOG|MET|SUP|EXT|MNT)-\d+\b/g) || [])];
+  let label = 'Demo mode · Based on sample records.';
+  if (connected) {
+    try {
+      const earlierQuestions = conversation.map(turn=>turn.question);
+      const response = await fetch('/api/ask', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:incident.id,cutoff:snapshot,question,earlierQuestions})});
+      if (!response.ok) throw Error();
+      const data = await response.json();
+      reply = data.answer;
+      ids = data.sources;
+      label = 'Gemini · Based on the selected evidence snapshot.';
+    } catch {
+      label = 'Gemini unavailable · Showing the demo answer.';
+    }
+  }
+  if (revision !== dialogRevision || !assistantWindow.open) return;
+  refreshAssistantDocument();
+  answer.textContent = reply;
+  mode.textContent = label;
+  sources.innerHTML = ids.map(ref).join('');
+  const earlier = assistantWindow.querySelector('#conversation-history');
+  earlier.hidden = conversation.length === 0;
+  assistantWindow.querySelector('#conversation-turns').innerHTML = conversation.map(turn=>
+    `<li><strong>${html(turn.question)}</strong><p>${html(turn.reply)}</p></li>`).join('');
+  conversation = [...conversation,{question,reply}].slice(-3);
+  control.disabled = false;
+  if (speak) readAloud(reply);
+}
+
+function readAloud(text) {
+  if (!('speechSynthesis' in window)) return notice('Speech playback is unavailable in this browser.');
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = 'en-CA';
+  utterance.rate = 0.94;
+  const status = assistantWindow.querySelector('#speech-status');
+  utterance.onstart = () => { if (status?.isConnected) status.textContent = 'Reading the answer aloud.'; };
+  utterance.onend = () => { if (status?.isConnected) status.textContent = 'Finished reading aloud.'; };
+  utterance.onerror = event => {
+    if (status?.isConnected && !['canceled','interrupted'].includes(event.error)) status.textContent = 'Voice playback is unavailable in this browser.';
+  };
+  window.speechSynthesis.speak(utterance);
+}
+function listen() {
+  const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const status = document.querySelector('#speech-status');
+  if (!Speech) { status.textContent = 'This browser lacks speech input. You can still type and play answers.'; return; }
+  if (speech) { speech.stop(); return; }
+  const current = new Speech();
+  speech = current;
+  current.lang = 'en-CA';
+  status.textContent = 'Listening… Speak a question.';
+  current.onresult = event => {
+    if (!status.isConnected) return;
+    status.textContent = '';
+    void ask(event.results[0][0].transcript.slice(0,400), true);
+  };
+  current.onerror = () => { if (status.isConnected) status.textContent = 'Speech input unavailable. Check microphone permissions or type your question.'; };
+  current.onend = () => {
+    if (speech === current) speech = null;
+    if (status.isConnected && status.textContent.startsWith('Listening')) status.textContent = 'No speech received. Try again or type your question.';
+  };
+  try { current.start(); }
+  catch { speech = null; status.textContent = 'Could not start speech input. Type your question instead.'; }
+}
+
+document.addEventListener('click',event=>{
+  const button = event.target.closest('button');
+  if (!button) return;
+  const data = button.dataset;
+  if (data.case) { choose(data.case); render(); }
+  else if (data.openCase) { choose(data.openCase); if (view() === 'desk') render(); else location.hash = 'desk'; }
+  else if (data.tab) { activeTab = data.tab; render(); }
+  else if (data.nav) location.hash = data.nav;
+  else if (data.task) actionOnTask(data.task,data.id);
+  else if (data.trigger) {
+    const incident = byId(data.trigger);
+    choose(incident.id);
+    void update(state=>{
+      if (!state.active.includes(incident.id)) state.active.push(incident.id);
+      notification(state,incident.id,'Sample alert received',incident.title);
+      if (incidentPriority(incident,state)==='P1' && !state.tasks[incident.id]) pageOnCall(state,incident);
+      return `Simulated alert received: ${incident.title}.`;
+    }).then(()=>relayNewAlert(incident,incidentPriority(incident)));
+  } else if ('reset' in data) {
+    choose('INC-121');
+    void update(state=>{ Object.assign(state,initial()); return 'Demo workspace reset.'; });
+  } else if (data.source) source(data.source);
+  else if ('live' in data) { cutoff='23:59'; render(); }
+  else if ('handoff' in data) draft();
+  else if ('notifications' in data) showNotifications();
+  else if (data.alertFilter) { alertFilter=data.alertFilter; render(); }
+  else if ('channels' in data) void showChannels();
+  else if ('telegramRouting' in data) void showTelegramRouting();
+  else if ('disableAutoTelegram' in data) void updateTelegramMode({enabled:false},button);
+  else if (data.createEnrollment) void createEnrollment(button);
+  else if ('refreshResponders' in data) void showTelegramRouting();
+  else if ('copyEnrollment' in data) {
+    const link=dialog.querySelector('#team-responder-link');
+    if(link)void navigator.clipboard.writeText(link.href).then(()=>notice('Responder enrollment link copied.'),()=>notice('Open the enrollment link and copy its address.'));
+  }
+  else if ('pairTeam' in data) pairRouteDestination('team');
+  else if ('pairResponder' in data) pairRouteDestination('responder');
+  else if (data.routeIncident) void reviewTelegramRoute(data.routeIncident);
+  else if (data.routeStatus) void trackTelegramRoute(data.routeStatus);
+  else if (data.startRoute) {
+    button.disabled=true;
+    const target=dialog.querySelector('[data-delivery-status]');
+    target.textContent='Starting the Telegram route…';
+    void deliveryApi('telegram-route-start',{token:data.startRoute,confirm:true}).then(result=>{
+      if(target.isConnected&&dialog.open)void trackTelegramRoute(result.route.id,result.route);
+    },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
+  }
+  else if (data.checkProvider) void checkProvider(data.checkProvider);
+  else if ('pairPersonal' in data) void discoverTelegram(undefined,true);
+  else if ('findChat' in data) void discoverTelegram();
+  else if (data.checkChat) void discoverTelegram(data.checkChat);
+  else if (data.provider) providerForm(data.provider);
+  else if (data.deliver) void reviewDelivery(data.deliver);
+  else if ('sendDelivery' in data && deliveryPreview?.canSend) {
+    const preview=deliveryPreview;
+    deliveryPreview=undefined;
+    button.disabled=true;
+    const target=dialog.querySelector('[data-delivery-status]');
+    target.textContent='Submitting the selected messages…';
+    void deliveryApi('send',{token:preview.token,confirm:true}).then(result=>{
+      if (!dialog.open || !target.isConnected) return;
+      openDialog(preview.incident,'Provider results',`<p>Provider acceptance confirms submission. Delivery to the destination can still fail after acceptance.</p>${deliveryLog(result.results)}
+      <button class="small" data-channels>Delivery setup and results</button>`);
+    },error=>{ if (target.isConnected) deliveryError(error); });
+  }
+  else if ('priority' in data) changePriority();
+  else if (data.setLevel) {
+    const incident = byId(selected);
+    if (!levels.includes(data.setLevel) && data.setLevel !== 'suggested') return;
+    void update(state=>{
+      state.priorities ||= {};
+      if (data.setLevel === 'suggested') delete state.priorities[incident.id];
+      else state.priorities[incident.id] = data.setLevel;
+      dialog.close();
+      return `Priority set to ${incidentPriority(incident,state)}.`;
+    });
+  }
+  else if (data.calendarDay) { calendarDay = Number(data.calendarDay); render(); }
+  else if ('calendarAll' in data) { calendarDay = undefined; render(); }
+  else if ('assistant' in data) assistant();
+  else if ('mic' in data) listen();
+  else if ('speak' in data) readAloud(document.querySelector('#answer').textContent);
+  else if ('close' in data) button.closest('dialog').close();
+  else if (data.prompt) void ask(data.prompt);
+  else if ('copy' in data) {
+    navigator.clipboard?.writeText(document.querySelector('#draft-note').value)
+      .then(()=>notice('Handoff draft copied.'),()=>notice('Select the draft text to copy it.'));
+  } else if (data.saveNote) {
+    const note = document.querySelector('#draft-note').value;
+    void update(state=>{
+      (state.notes ||= {})[data.saveNote] = note;
+      return 'Handoff draft saved on this computer.';
+    });
+  } else if (data.service) {
+    const service = services.find(item=>item.name===data.service);
+    const matching = workspace.active.map(byId).filter(item=>[...item.confirmed,...item.possible].includes(service.name));
+    openDialog(service.group, service.name, matching.length ? matching.map(item=>`<p>${html(item.title)} · ${item.confirmed.includes(service.name) ? 'Confirmed' : 'Possible'} impact</p><button class="small" data-open-case="${item.id}">Open ${item.id}</button>`).join('') : '<p>No active alerts in this sample workspace.</p>');
+  }
+  if (data.openCase && dialog.open) dialog.close();
+});
+document.addEventListener('submit',event=>{
+  if (event.target.id === 'assistant-form') {
+    event.preventDefault();
+    void ask(document.querySelector('#question').value);
+  }
+  const form=event.target;
+  if(form.matches('[data-auto-telegram]')){
+    event.preventDefault();
+    void updateTelegramMode({enabled:true,owner:form.elements.owner.value,wait:Number(form.elements.wait.value)},form.querySelector('[type=submit]'));
+    return;
+  }
+  if(form.matches('[data-route-pair]')) {event.preventDefault();void startRoutePair(form);return;}
+  if(form.matches('[data-verify-team]')){
+    event.preventDefault();
+    const button=form.querySelector('[type=submit]');
+    const target=form.querySelector('[data-team-result]');
+    button.disabled=true;
+    target.textContent='Checking group membership and posting permissions…';
+    void deliveryApi('telegram-pair-group',{chat:form.elements.chat.value}).then(result=>{
+      if(target.isConnected&&dialog.open)openDialog('Telegram routing','Destination paired',`<p>${html(result.detail)}</p><button class="small primary" data-telegram-routing>View Telegram routing</button>`);
+    },error=>{if(target.isConnected){target.textContent=error.message;button.disabled=false;}});
+    return;
+  }
+  if(form.matches('[data-routing-preview]')) {
+    event.preventDefault();
+    const id=form.dataset.routingPreview;
+    const button=form.querySelector('[type=submit]');
+    const target=form.querySelector('[data-delivery-status]');
+    button.disabled=true;
+    target.textContent='Preparing the exact messages…';
+    void deliveryApi('telegram-route-preview',{incident:id,level:incidentPriority(byId(id)),wait:Number(form.elements.wait?.value||60),owner:form.elements.owner?.value}).then(result=>{
+      if(target.isConnected&&dialog.open)previewTelegramRoute(id,result);
+    },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
+    return;
+  }
+  if (!form.matches('[data-provider-form],[data-preview-form]')) return;
+  event.preventDefault();
+  const values=new FormData(form);
+  const submit=form.querySelector('[type=submit]');
+  submit.disabled=true;
+  const target=form.querySelector('[data-delivery-status]');
+  target.textContent='Working…';
+  const incident=form.dataset.previewForm && byId(form.dataset.previewForm);
+  const isSettings=Boolean(form.dataset.providerForm);
+  const payload=isSettings ? {
+    channel:form.dataset.providerForm,
+    fields:Object.fromEntries([...values.entries()].map(([name,value])=>[name,value.trim()]).filter(([,value])=>value)),
+  } : {incident:incident.id,level:incidentPriority(incident),targets:values.getAll('target')};
+  void deliveryApi(isSettings?'settings':'preview',payload).then(result=>{
+    if (!dialog.open || !target.isConnected) return;
+    if (isSettings) void showChannels();
+    else showDeliveryPreview(result);
+  },error=>{
+    if (!target.isConnected) return;
+    deliveryError(error);
+    submit.disabled=false;
+  });
+});
+document.addEventListener('input',event=>{
+  if (event.target.id === 'cost-window') {
+    const money = byId(selected).money;
+    const minutes = Number(event.target.value);
+    document.querySelector('#cost-minutes').textContent = `${minutes} minutes`;
+    document.querySelector('#cost-projection').textContent = `${cad(money.low*money.order*minutes)}–${cad(money.high*money.order*minutes)} CAD at this duration`;
+  }
+  if (event.target.id === 'search') {
+    query = event.target.value.trim().toLowerCase();
+    const lists = {services:serviceList,history:historyList,runbooks:documentList};
+    document.querySelector('#list').innerHTML = lists[view()]();
+  }
+  if (event.target.id === 'replay-range') {
+    const incident = byId(selected);
+    cutoff = times(incident)[Number(event.target.value)];
+    event.target.setAttribute('aria-valuetext',cutoff + ' ET');
+    document.querySelector('#replay-time').textContent = cutoff + ' ET';
+    document.querySelector('#replay-details').innerHTML = replayDetails(incident,investigate(incident,cutoff));
+    if (assistantWindow.open) assistantWindow.close();
+  }
+});
+document.addEventListener('change',event=>{
+  if (event.target.id === 'calendar-month') {
+    calendarMonth = Number(event.target.value);
+    calendarDay = undefined;
+    render();
+    document.querySelector('#calendar-month').focus();
+  }
+});
+assistantWindow.addEventListener('close',()=>{
+  dialogRevision++;
+  speech?.abort();
+  window.speechSynthesis?.cancel();
+});
+persona.addEventListener('change',()=>{
+  actor = persona.value;
+  sessionStorage.setItem('ic-actor',actor);
+  render();
+});
+night.addEventListener('click',()=>{
+  const enabled = document.body.classList.toggle('night');
+  night.setAttribute('aria-pressed',String(enabled));
+  localStorage.setItem('ic-night',String(enabled));
+});
+window.addEventListener('storage',event=>{
+  if (event.key !== saveKey) return;
+  workspace = read();
+  if (!workspace.active.includes(selected)) choose(workspace.active[0]);
+  render();
+});
+window.addEventListener('hashchange',()=>{ query=''; render(); main.focus(); });
+window.addEventListener('focus',refreshAutomaticIndicator);
+refreshAutomaticIndicator();
+setInterval(tick,250);
+if (location.protocol.startsWith('http')) fetch('/api/status').then(response=>response.json()).then(status=>{ connected=status.gemini; }).catch(()=>{});
+render();
+
+</script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to dashboard</a>
+  <div class="frame">
+    <header class="top">
+      <a class="brand" href="#desk"><span class="brand-mark" aria-hidden="true">✳</span> Incident Compass</a>
+      <nav aria-label="Workspace">
+        <a href="#desk" data-view="desk">Desk</a>
+        <a href="#alerts" data-view="alerts">Alerts</a>
+        <a href="#services" data-view="services">Services</a>
+        <a href="#history" data-view="history">History</a>
+        <a href="#runbooks" data-view="runbooks">Runbooks</a>
+        <a href="#calendar" data-view="calendar">Calendar</a>
+        <a href="#chat" data-view="chat"># General <span id="chat-count" hidden></span></a>
+      </nav>
+      <div class="top-right">
+        <label class="sr-only" for="persona">Act as demo teammate</label>
+        <select id="persona"></select>
+        <button class="small" id="notifications" data-notifications>Notifications</button>
+        <button class="small" id="night" aria-pressed="false" title="Toggle simplified on-call view">3 a.m. mode</button>
+      </div>
+    </header>
+    <main id="main" tabindex="-1"></main>
+    <footer><span>INCIDENT COMPASS / BRAMPTON AI INNOVATOR</span><span>FICTIONAL DATA · EASTERN TIME</span></footer>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+  <dialog id="assistant-window" aria-labelledby="assistant-title"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

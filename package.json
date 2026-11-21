@@ -1,0 +1,14 @@
+{
+  "name": "incident-compass",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local cloud incident desk and Telegram alert router for the Brampton AI Innovator demo",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "check": "node --check server.mjs && node --check alerts.mjs && node --check telegram-routing.mjs && node --check public/app.mjs && node --check public/data.mjs"
+  }
+}

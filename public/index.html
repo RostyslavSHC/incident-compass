@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en-CA">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A cloud incident desk for investigating alerts, reviewing evidence and handing urgent work to an available engineer.">
+  <title>Incident Compass | On-call desk</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.mjs"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to dashboard</a>
+  <div class="frame">
+    <header class="top">
+      <a class="brand" href="#desk"><span class="brand-mark" aria-hidden="true">✳</span> Incident Compass</a>
+      <nav aria-label="Workspace">
+        <a href="#desk" data-view="desk">Desk</a>
+        <a href="#alerts" data-view="alerts">Alerts</a>
+        <a href="#services" data-view="services">Services</a>
+        <a href="#history" data-view="history">History</a>
+        <a href="#runbooks" data-view="runbooks">Runbooks</a>
+        <a href="#calendar" data-view="calendar">Calendar</a>
+        <a href="#chat" data-view="chat"># General <span id="chat-count" hidden></span></a>
+      </nav>
+      <div class="top-right">
+        <label class="sr-only" for="persona">Act as demo teammate</label>
+        <select id="persona"></select>
+        <button class="small" id="notifications" data-notifications>Notifications</button>
+        <button class="small" id="night" aria-pressed="false" title="Toggle simplified on-call view">3 a.m. mode</button>
+      </div>
+    </header>
+    <main id="main" tabindex="-1"></main>
+    <footer><span>INCIDENT COMPASS / BRAMPTON AI INNOVATOR</span><span>FICTIONAL DATA · EASTERN TIME</span></footer>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+  <dialog id="assistant-window" aria-labelledby="assistant-title"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+node_modules/
+.alert-*.local.json
+.alert-providers.*.tmp
+.telegram-routing.local.json
+.telegram-routing.*.tmp
