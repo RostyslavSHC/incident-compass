@@ -12,7 +12,17 @@ node --env-file-if-exists=.env server.mjs
 
 Open [http://127.0.0.1:4173](http://127.0.0.1:4173) in Chrome or Edge.
 
-You can also run `npm start` from the project directory. For a browser-only preview, open [demo/incident-compass.html](demo/incident-compass.html) locally. Run `npm run check` to check the source syntax.
+Use `npm start` to launch the server, `npm run check` to check the source syntax, or `npm test` to run the tests. For a browser-only preview, open [demo/incident-compass.html](demo/incident-compass.html) locally.
+
+## Run the live demo
+
+Open **Incident simulator** from the workspace menu. Choose a template to edit it, use **Run now** for a single incident, or choose **Run all four severities** to demonstrate incoming alerts. To create your own event, fill in the form, preview the incident, and confirm. Schedule a trigger in the device’s local time. Incident timestamps in the workspace display Eastern Time.
+
+On the Desk, acknowledge the incident, update its status and severity, and resolve it with a recovery note. The queue and active counts update, and resolved test incidents appear in History. Find upcoming events in the simulator or Calendar. Use **Notifications** for unread activity, notification history, and the sound toggle.
+
+The browser profile stores custom test events. Keep the workspace open to fire a scheduled test on time. An overdue test fires when the workspace next opens. All custom events stay within the browser workspace, including their local assistant responses. Prepared alerts retain their Telegram routing settings. **Reset custom simulations** clears the test events and their notifications after confirmation.
+
+Run `node --test test/simulations.test.mjs` to check severity templates, validation, scheduling, the status lifecycle, and evidence handling.
 
 ## Enable Gemini
 
@@ -23,7 +33,7 @@ The microphone uses browser dictation where available, subject to the browser's 
 ## Demo path
 
 1. **After a release** shows the checkout failure and the recent Payments API release. Open **Investigation log** for the actual record lookups and **Time Machine** to move between the alert at 10:02 and the provider bulletin at 10:07. The bulletin's availability time differs from the provider's estimated outage start.
-2. On the urgent checkout case, **Page on-call** starts a 30-second acceptance window for Maya Chen. Try **Accept task**, or use **I’m busy** or **Simulate timeout** to create a team-wide message in **# General**. Switch to another teammate and claim it. Use **Reset** in the alert queue to run the other branch.
+2. On the urgent checkout case, **Page on-call** starts a 30-second acceptance window for Maya Chen. Try **Accept task**, or use **I’m busy** or **Simulate timeout** to create a team-wide message in **# General**. Switch to another teammate and claim it. Use **Reset prepared alerts** in the alert queue to run the other branch.
 3. **Repeat incident** finds a matching signature and shows its previous responder and documented fix. **Unknown issue** shows the recent changes and says no fix is known. **Planned work** adds a maintenance scenario.
 4. Try **Ask assistant**, **Draft handoff**, or **3 a.m. mode**. Use the **Services**, **History** and **Calendar** views to browse the same fictional environment.
 5. **Notifications** records simulated alerts, pages, escalations and claims. **Change priority** lets the engineer override the suggested severity. The checkout brief groups two sample alerts and includes a duration slider for orders at risk. Handoff drafts can be edited and saved on this browser. Gemini can interpret follow-up questions within the current incident and replay snapshot.
@@ -50,10 +60,10 @@ The local server polls Telegram for replies while a route is active and saves ro
 
 **Automatic Telegram alerts** routes new demo alert events as soon as they are triggered from the Desk. Select a default private responder and timeout in **Alerts → Telegram routing**. Enabling the mode does not send the incidents that are already in the queue. The local alert-event endpoint can accept events from an integration in the same local app; the demo is not connected to a real monitoring service.
 
+For an incident that is already prepared, open **Alerts → Send Telegram notification**. Choose the group or one paired responder, preview the content, and send. This sends one message immediately without starting or modifying an escalation route.
+
 Create a **Shared responder link** in the same panel. Once a group member opens it and taps **Start**, the bot verifies their group membership and adds their private chat to the responder list. Team alerts include the link automatically. New teammates join the Telegram group first using a group invitation. Telegram requires each person to start the bot before it can send them a private message. If membership checks cannot see other group members, the group owner may need to make the bot an administrator.
 
 Set the local recipient lists in `.alert-recipients.local.json` beside `server.mjs`, using the format `{"email":[],"sms":[]}`. Enter telephone numbers in international E.164 format. Telegram uses the chat ID or public channel username in its provider settings. The dashboard masks recipients on screen. The source bundle excludes the local recipient and credential files.
 
-In **Alerts**, filter by severity or open any incident card. Use **Review delivery** to choose recipients and see the exact message, then **Confirm and send live** for configured providers. A preview with no recipients shows the three channel formats. Simulating an alert, setting a provider, or letting an in-app page expire does not automatically send external messages. Provider acceptance is recorded during the current server session and may precede final delivery. The standalone HTML uses in-app alerts; external delivery requires the local server.
-
-For an incident that is already prepared, open **Alerts → Send Telegram notification**. Choose the group or one paired responder, preview the content, and send. This sends one message immediately without starting or modifying an escalation route.
+In **Alerts**, filter by severity or open any incident card. On a prepared incident, use **Review delivery** to choose recipients and see the exact message, then **Confirm and send live** for configured providers. A preview with no recipients shows the three channel formats. Prepared alerts can send automatically when Telegram automation is enabled. Provider acceptance is recorded during the current server session and may precede final delivery. The standalone HTML supports in-app alerts. Start the local server to use external providers.

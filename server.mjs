@@ -7,11 +7,13 @@ const key = process.env.GEMINI_API_KEY?.trim();
 const model = process.env.GEMINI_MODEL?.trim() || 'gemini-3.1-flash-lite';
 if (!/^gemini-[a-z0-9.\-]+$/.test(model)) throw new Error('Set GEMINI_MODEL to a valid Gemini model ID.');
 const port = Number(process.env.PORT || 4173);
+const localOrigin = `http://127.0.0.1:${port}`;
 const files = {
   '/':['index.html','text/html; charset=utf-8'],
   '/style.css':['style.css','text/css; charset=utf-8'],
   '/app.mjs':['app.mjs','text/javascript; charset=utf-8'],
   '/data.mjs':['data.mjs','text/javascript; charset=utf-8'],
+  '/simulations.mjs':['simulations.mjs','text/javascript; charset=utf-8'],
 };
 
 function json(response,status,data) {
@@ -21,11 +23,11 @@ function json(response,status,data) {
 const alerts = createAlertApi({port,json});
 
 async function ask(request,response) {
-  if (!key) return json(response,503,{error:'Gemini is not configured.'});
-  const currentOrigin = `http://${request.headers.host}`;
-  if (request.headers.origin !== currentOrigin || !request.headers['content-type']?.startsWith('application/json')) {
+  if (request.headers.host !== `127.0.0.1:${port}` || request.headers.origin !== localOrigin ||
+      request.headers['content-type']?.split(';',1)[0].trim() !== 'application/json') {
     return json(response,403,{error:'Use the local incident dashboard.'});
   }
+  if (!key) return json(response,503,{error:'Gemini is not configured.'});
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -114,13 +116,13 @@ async function ask(request,response) {
 }
 
 createServer(async (request,response)=>{
-  const pathname = new URL(request.url,'http://localhost').pathname;
   try {
+    const pathname = new URL(request.url,localOrigin).pathname;
     if (request.method === 'GET' && pathname === '/api/status') return json(response,200,{gemini:Boolean(key)});
     if (request.method === 'POST' && pathname === '/api/ask') return await ask(request,response);
     if (pathname.startsWith('/api/alerts/')) return await alerts(request,response,pathname);
     const asset = files[pathname];
-    if (request.method !== 'GET' || !asset) return json(response,404,{error:'Not found.'});
+    if (request.method !== 'GET' || !Array.isArray(asset)) return json(response,404,{error:'Not found.'});
     const [name, type] = asset;
     const contents = await readFile(new URL('./public/' + name,import.meta.url));
     response.writeHead(200,{
@@ -136,5 +138,5 @@ createServer(async (request,response)=>{
     else response.end();
   }
 }).listen(port,'127.0.0.1',()=>{
-  console.log(`Incident Compass · http://127.0.0.1:${port} · ${key ? 'Gemini configured' : 'demo mode'}`);
+  console.log(`Incident Compass · ${localOrigin} · ${key ? 'Gemini configured' : 'demo mode'}`);
 });

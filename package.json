@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",
-    "check": "node --check server.mjs && node --check alerts.mjs && node --check telegram-routing.mjs && node --check public/app.mjs && node --check public/data.mjs"
+    "check": "node --check server.mjs && node --check alerts.mjs && node --check telegram-routing.mjs && node --check public/app.mjs && node --check public/data.mjs && node --check public/simulations.mjs",
+    "test": "node --test"
   }
 }

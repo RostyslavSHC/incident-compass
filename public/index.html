@@ -13,9 +13,11 @@
   <div class="frame">
     <header class="top">
       <a class="brand" href="#desk"><span class="brand-mark" aria-hidden="true">✳</span> Incident Compass</a>
-      <nav aria-label="Workspace">
+      <button class="small nav-toggle" id="nav-toggle" type="button" aria-controls="workspace-nav" aria-expanded="false">Menu</button>
+      <nav id="workspace-nav" aria-label="Workspace">
         <a href="#desk" data-view="desk">Desk</a>
         <a href="#alerts" data-view="alerts">Alerts</a>
+        <a href="#simulator" data-view="simulator">Incident simulator</a>
         <a href="#services" data-view="services">Services</a>
         <a href="#history" data-view="history">History</a>
         <a href="#runbooks" data-view="runbooks">Runbooks</a>
@@ -25,15 +27,16 @@
       <div class="top-right">
         <label class="sr-only" for="persona">Act as demo teammate</label>
         <select id="persona"></select>
-        <button class="small" id="notifications" data-notifications>Notifications</button>
+        <button class="small" id="notifications" data-notifications>Notifications <span id="notification-count" class="count-pill" hidden></span></button>
         <button class="small" id="night" aria-pressed="false" title="Toggle simplified on-call view">3 a.m. mode</button>
       </div>
     </header>
-    <main id="main" tabindex="-1"></main>
+    <main id="main" tabindex="-1"><section class="loading-surface" role="status"><span class="sr-only">Loading the incident workspace</span><i></i><i></i><i></i></section></main>
     <footer><span>INCIDENT COMPASS / BRAMPTON AI INNOVATOR</span><span>FICTIONAL DATA · EASTERN TIME</span></footer>
   </div>
   <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
   <dialog id="assistant-window" aria-labelledby="assistant-title"></dialog>
-  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="toast-announcer" class="sr-only" role="status" aria-atomic="true"></div>
+  <div id="toast-stack" aria-label="Recent notifications"></div>
 </body>
 </html>

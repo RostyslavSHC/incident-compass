@@ -188,7 +188,7 @@ export function createAlertApi({port,json,request = fetch}) {
       return json(res,200,{channels:channelStatus(await loadConfig()),deliveries:deliveries.slice(0,20)});
     }
     if (path==='/api/alerts/telegram-routing' && req.method==='GET') return json(res,200,await telegram.list());
-    if (req.method!=='POST' || req.headers.origin!==origin || !req.headers['content-type']?.startsWith('application/json')) {
+    if (req.method!=='POST' || req.headers.origin!==origin || req.headers['content-type']?.split(';',1)[0].trim()!=='application/json') {
       return json(res,403,{error:'Use the local Incident Compass dashboard.'});
     }
     const input=await readJson(req);

@@ -1,4 +1,8 @@
 import {documents, history, investigate, priority, scenarios, services, teammates, upcoming} from './data.mjs';
+import {
+  asInvestigation, createSimulation, formatIncidentTime, releaseSimulation, simulationCategories,
+  simulationSeverities, simulationStatuses, simulationTemplates, updateSimulation, validateSimulation,
+} from './simulations.mjs';
 
 const main = document.querySelector('#main');
 const dialog = document.querySelector('#dialog');
@@ -8,8 +12,9 @@ const night = document.querySelector('#night');
 const saveKey = 'incident-compass-workspace-v1';
 const windowMs = 30_000;
 const tabs = [['brief','Brief'],['details','Case details'],['runbook','Runbooks'],['trace','Investigation log'],['replay','Time Machine'],['compare','Compare']];
-const pages = ['desk','alerts','services','history','runbooks','calendar','chat'];
-const byId = id => scenarios.find(incident => incident.id === id);
+const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','chat'];
+const byId = (id,state = workspace) => state.custom[id]
+  ? asInvestigation(state.custom[id]) : scenarios.find(incident => incident.id === id);
 const html = value => String(value ?? '').replace(/[&<>"']/g, char =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const badge = level => `<span class="badge ${level}">${level}</span>`;
@@ -18,13 +23,23 @@ const documentLink = document => `<button type="button" class="small doc-link" d
 const cad = dollars => new Intl.NumberFormat('en-CA', {style:'currency',currency:'CAD',maximumFractionDigits:0}).format(dollars);
 const levels = ['P1','P2','P3'];
 const severityNames = {P1:'Critical',P2:'High',P3:'Monitor'};
-const incidentPriority = (incident,state = workspace) => state.priorities?.[incident.id] || priority(incident);
+const incidentPriority = (incident,state = workspace) => state.custom[incident?.id]?.level
+  || state.priorities[incident?.id] || (incident ? priority(incident) : 'P3');
+const levelName = (level,isTest = false) => (isTest ? simulationSeverities : severityNames)[level] || simulationSeverities[level] || 'Info';
+const testBadge = '<span class="badge test-badge">Test event</span>';
+const openIncidents = () => workspace.active.map(id=>byId(id)).filter(Boolean);
 
 function initial() {
-  return {active:scenarios.slice(0,3).map(incident => incident.id), tasks:{}, messages:[], priorities:{}, notifications:[], notes:{}};
+  return {active:scenarios.slice(0,3).map(incident => incident.id), tasks:{}, messages:[], priorities:{}, notifications:[], notes:{}, custom:{}};
 }
 function read() {
-  try { return JSON.parse(localStorage.getItem(saveKey)) || initial(); }
+  try {
+    const state = {...initial(), ...JSON.parse(localStorage.getItem(saveKey))};
+    state.notifications = state.notifications.map((entry,index)=>({
+      key:`legacy-${entry.time}-${index}`,read:false,...entry
+    }));
+    return state;
+  }
   catch { return initial(); }
 }
 let workspace = read();
@@ -34,15 +49,26 @@ let activeTab = 'brief';
 let cutoff = '23:59';
 let query = '';
 let connected = false;
-let toastTimer;
+const toastQueue = [];
+const openToasts = new Map();
+const toastShelf = document.querySelector('#toast-stack');
+const announcer = document.querySelector('#toast-announcer');
+let sound = localStorage.getItem('ic-notification-sound') === 'true';
+let audio;
 let speech;
 let dialogRevision = 0;
 let escalatorBusy = false;
 let conversation = [];
 let conversationScope;
-let calendarMonth = 10;
+let calendarMonth = 2026 * 12 + 10;
 let calendarDay;
 let alertFilter = 'all';
+let alertSort = 'severity';
+let alertQuery = '';
+let renderedPage;
+let revealObserver;
+let simulatorDraft = {};
+let notificationHistory = false;
 let automaticTelegram = false;
 let deliveryState;
 let deliveryPreview;
@@ -61,23 +87,129 @@ function view() {
   const hash = location.hash.slice(1);
   return pages.includes(hash) ? hash : 'desk';
 }
-function notice(message) {
-  const toast = document.querySelector('#toast');
-  clearTimeout(toastTimer);
-  toast.textContent = message;
-  toastTimer = setTimeout(() => { toast.textContent = ''; }, 4800);
+const severityIcons = {P1:'!',P2:'↑',P3:'•',P4:'↓'};
+
+function notificationSound(critical) {
+  if (!sound || audio?.state !== 'running') return;
+  const tone = audio.createOscillator();
+  const gain = audio.createGain();
+  const start = audio.currentTime;
+  tone.frequency.value = critical ? 660 : 440;
+  gain.gain.setValueAtTime(0.075,start);
+  gain.gain.exponentialRampToValueAtTime(0.001,start + 0.18);
+  tone.connect(gain).connect(audio.destination);
+  tone.start(start);
+  tone.stop(start + 0.2);
+}
+
+function notice(message, kind = 'success') {
+  queueToasts([{key:crypto.randomUUID(),title:message,kind}]);
+}
+
+function queueToasts(entries) {
+  const batch = entries.filter(entry=>!entry.read && !openToasts.has(entry.key) && !toastQueue.some(item=>item.key===entry.key));
+  if (!batch.length) return;
+  toastQueue.push(...batch);
+  toastQueue.sort((a,b)=> (a.level || 'Z').localeCompare(b.level || 'Z'));
+  const critical = batch.some(entry=>entry.level==='P1');
+  if (critical && openToasts.size >= 3) {
+    const lower = [...openToasts.values()].reverse().find(entry=>entry.level!=='P1');
+    if (lower) dismissToast(lower.key);
+  }
+  announcer.textContent = batch.map(entry=>entry.title).join('. ');
+  notificationSound(critical);
+  showQueuedToasts();
+}
+
+function showQueuedToasts() {
+  while (openToasts.size < 3 && toastQueue.length) {
+    const entry = toastQueue.shift();
+    const duration = entry.level === 'P1' ? 0 : entry.level ? 8500 : 4600;
+    const item = document.createElement('article');
+    item.className = `toast-card ${entry.level || entry.kind || ''}`;
+    item.innerHTML = `<div class="toast-icon" aria-hidden="true">${severityIcons[entry.level] || (entry.kind==='error'?'!':'✓')}</div>
+      <div class="toast-copy">${entry.level ? `<small>${levelName(entry.level,entry.test)}${entry.test?' · Test event':''}</small>` : ''}
+      <strong>${html(entry.title)}</strong>${entry.description ? `<p>${html(entry.description)}</p>` : ''}
+      ${entry.id ? `<button class="small" data-open-case="${html(entry.id)}" data-read-notice="${html(entry.key)}">View incident</button>` : ''}</div>
+      <button class="toast-dismiss" data-dismiss-toast="${html(entry.key)}" aria-label="Dismiss notification">×</button>
+      ${duration ? `<span class="toast-progress" style="--toast-duration:${duration}ms" aria-hidden="true"></span>` : ''}`;
+    const dismissButton = item.querySelector('[data-dismiss-toast]');
+    toastShelf.append(item);
+    const record = {...entry,item,timer:undefined};
+    openToasts.set(entry.key,record);
+    if (duration) {
+      let remaining = duration;
+      let started;
+      const resume = () => {
+        if (record.timer || item.matches(':hover') || item.contains(document.activeElement)) return;
+        started = performance.now();
+        record.timer = setTimeout(()=>dismissToast(entry.key),remaining);
+        item.classList.remove('paused');
+      };
+      const pause = () => {
+        if (!record.timer) return;
+        clearTimeout(record.timer);
+        record.timer = undefined;
+        remaining = Math.max(0,remaining - (performance.now() - started));
+        item.classList.add('paused');
+      };
+      item.addEventListener('pointerenter',pause);
+      item.addEventListener('pointerleave',resume);
+      item.addEventListener('focusin',pause);
+      item.addEventListener('focusout',()=>queueMicrotask(resume));
+      item.classList.add('paused');
+      resume();
+    }
+    dismissButton.title = 'Dismiss this toast';
+  }
+}
+
+function dismissToast(key) {
+  const entry = openToasts.get(key);
+  if (!entry || entry.item.classList.contains('leaving')) return;
+  clearTimeout(entry.timer);
+  entry.item.classList.add('leaving');
+  const remove = () => {
+    entry.item.remove();
+    openToasts.delete(key);
+    showQueuedToasts();
+  };
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) remove();
+  else setTimeout(remove,170);
+}
+
+function discardRemovedToasts() {
+  const keys = new Set(workspace.notifications.map(entry=>entry.key));
+  for (let index = toastQueue.length-1; index>=0; index--) {
+    if (toastQueue[index].id && !keys.has(toastQueue[index].key)) toastQueue.splice(index,1);
+  }
+  for (const entry of openToasts.values()) {
+    if (entry.id && !keys.has(entry.key)) dismissToast(entry.key);
+  }
 }
 
 async function update(change) {
   const apply = () => {
     workspace = read();
+    const before = new Set(workspace.notifications.map(entry=>entry.key));
     const message = change(workspace);
     localStorage.setItem(saveKey, JSON.stringify(workspace));
     render();
-    if (message) notice(message);
+    discardRemovedToasts();
+    const arrivals = workspace.notifications.filter(entry=>!before.has(entry.key)).reverse();
+    if (arrivals.length) queueToasts(arrivals);
+    else if (message) notice(message);
   };
-  if (navigator.locks) await navigator.locks.request(saveKey, apply);
-  else apply();
+  try {
+    if (navigator.locks) await navigator.locks.request(saveKey, apply);
+    else apply();
+    return true;
+  } catch (error) {
+    workspace = read();
+    render();
+    notice(error.message || 'The workspace could not be updated.','error');
+    return false;
+  }
 }
 
 function escalate(state, incident, reason) {
@@ -87,8 +219,11 @@ function escalate(state, incident, reason) {
 }
 
 function notification(state,id,title,description) {
-  (state.notifications ||= []).unshift({id,title,description,time:Date.now(),level:incidentPriority(byId(id),state)});
-  state.notifications.length = Math.min(state.notifications.length,30);
+  state.notifications.unshift({
+    key:crypto.randomUUID(),id,title,description,time:Date.now(),level:incidentPriority(byId(id,state),state),
+    test:Boolean(state.custom[id]),read:false
+  });
+  state.notifications.length = Math.min(state.notifications.length,100);
 }
 
 function pageOnCall(state,incident) {
@@ -97,14 +232,19 @@ function pageOnCall(state,incident) {
 }
 
 function tick() {
-  const latest = read();
-  const due = Object.entries(latest.tasks).filter(([, task]) => task.status === 'pending' && task.until <= Date.now());
-  if (due.length && !escalatorBusy) {
+  const latest = workspace;
+  const now = Date.now();
+  const due = Object.entries(latest.tasks).filter(([, task]) => task.status === 'pending' && task.until <= now);
+  const scheduled = Object.values(latest.custom).some(incident=>incident.triggeredAt===null && incident.scheduledAt<=now);
+  if ((due.length || scheduled) && !escalatorBusy) {
     escalatorBusy = true;
     update(state => {
       const expired = due.filter(([id]) => state.tasks[id]?.status === 'pending' && state.tasks[id].until <= Date.now());
-      for (const [id] of expired) escalate(state, byId(id), 'Acknowledgement timed out.');
-      if (expired.length) return 'Urgent page escalated to #general.';
+      for (const [id] of expired) {
+        const incident = byId(id,state);
+        if (incident) escalate(state, incident, 'Acknowledgement timed out.');
+      }
+      for (const incident of Object.values(state.custom)) publishSimulation(state,incident,Date.now());
     }).finally(() => { escalatorBusy = false; });
   }
   const timer = document.querySelector('[data-countdown]');
@@ -249,30 +389,209 @@ function compare(incident, result) {
   if (!record) return '<p>No relevant incident found in the sample archive.</p>';
   const match = incident.fingerprint === record.fingerprint;
   return `<p class="lead"><strong>${match ? 'Same service and error signature.' : 'Same service, different error signature.'}</strong><br>${match ? 'Verify the earlier fix applies to the current environment.' : 'Treat the old resolution as background only.'}</p>
-    <div class="duo"><section class="panel"><div class="kicker">Current / ${incident.id}</div><h3>${html(incident.title)}</h3><p class="mono">${incident.fingerprint}</p><p>Suggested priority: ${priority(incident)}</p><p>${html(result.cause)}</p></section>
+    <div class="duo"><section class="panel"><div class="kicker">Current / ${incident.id}</div><h3>${html(incident.title)}</h3><p class="mono">${incident.fingerprint}</p><p>${workspace.custom[incident.id] ? 'Test severity: '+simulationSeverities[incident.level] : 'Suggested priority: '+priority(incident)}</p><p>${html(result.cause)}</p></section>
     <section class="panel"><div class="kicker">Previous / ${record.id}</div><h3>${html(record.title)}</h3><p class="mono">${record.fingerprint}</p><p>${record.priority} · ${html(record.responder)}</p><p>${html(record.fix || 'The responder did not document a fix.')}</p>${ref(record.id)}</section></div>`;
 }
 
+const serviceNames = services.map(service=>service.name);
+const options = (entries,value) => entries.map(([key,label])=>
+  `<option value="${html(key)}" ${key===value?'selected':''}>${html(label)}</option>`).join('');
+const testStatus = incident => incident.triggeredAt===null ? 'Scheduled' : simulationStatuses[incident.status];
+function earliestLocalTrigger() {
+  const moment = new Date();
+  return new Date(moment.getTime()-moment.getTimezoneOffset()*60_000+1000).toISOString().slice(0,19);
+}
+
+function publishSimulation(state,record,now) {
+  if (!releaseSimulation(record,now)) return;
+  if (record.status !== 'resolved') state.active.push(record.id);
+  notification(state,record.id,record.title,`Simulation fired · ${record.service} · ${testStatus(record)}`);
+}
+
+function simulator() {
+  const draft = simulatorDraft;
+  const scheduled = draft.trigger==='scheduled';
+  const upcomingTests = Object.values(workspace.custom).filter(record=>record.triggeredAt===null)
+    .sort((a,b)=>a.scheduledAt-b.scheduledAt);
+  const count = Object.keys(workspace.custom).length;
+  const templates = simulationTemplates.map((item,index)=>`<li class="template-card ${item.level}">
+    <span class="badge ${item.level}">${simulationSeverities[item.level]}</span>
+    <h3>${html(item.title)}</h3><p>${html(item.service)}</p><div class="buttons">
+    <button class="small" data-load-template="${index}">Use template</button>
+    <button class="small primary" data-fire-template="${index}" aria-label="Run ${html(item.title)}">Run now</button></div></li>`).join('');
+  return layout('Incident simulator.','Create a test incident and walk it through the same desk, alert inbox, and archive.',`
+    <section class="simulation-banner row"><div><span class="badge test-badge">Demo mode</span>
+    <p>Simulator events stay in this workspace. Existing prepared alerts keep their Telegram settings.</p></div>
+    <div class="buttons"><button class="small" data-run-burst>Run all four severities</button>
+    <button class="small danger" data-reset-custom ${count?'':'disabled'}>Reset custom simulations</button></div></section>
+    <section class="template-section" aria-labelledby="template-title"><h2 id="template-title">Demo scenarios</h2>
+    <ul class="template-grid">${templates}</ul></section>
+    <div class="simulator-grid">
+    <section class="panel simulator-editor"><h2>Create custom incident</h2><form id="simulation-form" class="simulation-form">
+      <label class="wide">Incident title<input name="title" required maxlength="100" value="${html(draft.title)}"></label>
+      <label class="wide">Description<textarea name="description" required maxlength="1600" rows="4">${html(draft.description)}</textarea></label>
+      <label>Service<select name="service" required>${options([['','Choose a service'],...serviceNames.map(value=>[value,value])],draft.service || '')}</select></label>
+      <label>Category<select name="category">${options(simulationCategories.map(value=>[value,value]),draft.category || 'Availability')}</select></label>
+      <label>Incident type<input name="type" required maxlength="70" value="${html(draft.type)}" placeholder="e.g. Service outage"></label>
+      <label>Severity<select name="level">${options(Object.entries(simulationSeverities),draft.level || 'P3')}</select></label>
+      <label>Location <small>Optional</small><input name="location" maxlength="100" value="${html(draft.location)}"></label>
+      <label>Affected area <small>Optional</small><input name="area" maxlength="120" value="${html(draft.area)}"></label>
+      <label>Initial status<select name="status">${options(Object.entries(simulationStatuses),draft.status || 'reported')}</select></label>
+      <label>Incident timestamp <small>Optional · device time</small><input name="occurred" type="datetime-local" value="${html(draft.occurred)}"></label>
+      <label class="wide">Recommended actions <small>Optional</small><textarea name="actions" maxlength="1000" rows="3">${html(draft.actions)}</textarea></label>
+      <label>Trigger<select name="trigger">${options([['immediate','Immediately'],['scheduled','At a scheduled time']],scheduled?'scheduled':'immediate')}</select></label>
+      <label data-scheduled-field ${scheduled?'':'hidden'}>Trigger time <small>Device time</small><input name="scheduled" type="datetime-local" step="1" min="${earliestLocalTrigger()}" value="${html(draft.scheduled)}" ${scheduled?'required':'disabled'}></label>
+      <p class="wide quiet small" data-schedule-hint ${scheduled?'':'hidden'}>Keep a workspace tab open for on-time delivery. Overdue events fire when you reopen it.</p>
+      <p class="wide form-error" id="simulation-error" role="alert"></p>
+      <div class="buttons wide"><button type="submit" class="primary">Preview incident</button></div>
+    </form></section>
+    <section class="panel scheduled-panel"><div class="row"><h2>Scheduled</h2><span class="badge neutral">${upcomingTests.length}</span></div>
+    <ul class="archive">${upcomingTests.map(record=>`<li><div class="row"><strong>${html(record.title)}</strong>${badge(record.level)}</div>
+      <p class="small">${html(formatIncidentTime(record.scheduledAt))} · ${html(record.service)}</p>
+      <div class="buttons"><button class="small" data-open-case="${record.id}">View incident</button>
+      <button class="small danger" data-delete-custom="${record.id}">Cancel schedule</button></div></li>`).join('') || '<li>No scheduled test events.</li>'}</ul></section>
+    </div>`);
+}
+
+function previewSimulation(values) {
+  const input = validateSimulation(values,serviceNames);
+  const time = input.occurredAt ?? input.scheduledAt;
+  openDialog('Incident simulator','Preview custom incident',`
+    <div class="row">${testBadge}<span class="badge ${input.level}">${simulationSeverities[input.level]}</span></div>
+    <h3>${html(input.title)}</h3><p class="chat-answer">${html(input.description)}</p>
+    <dl class="case-facts">
+      <div><dt>Service</dt><dd>${html(input.service)}</dd></div><div><dt>Initial status</dt><dd>${simulationStatuses[input.status]}</dd></div>
+      <div><dt>Category and type</dt><dd>${html(input.category)} · ${html(input.type)}</dd></div>
+      ${input.location ? `<div><dt>Location</dt><dd>${html(input.location)}</dd></div>` : ''}
+      ${input.area ? `<div><dt>Affected area</dt><dd>${html(input.area)}</dd></div>` : ''}
+      <div><dt>Incident timestamp</dt><dd>${time===null?'At creation':html(formatIncidentTime(time))}</dd></div>
+      <div><dt>Trigger</dt><dd>${input.scheduledAt===null?'Immediately':html(formatIncidentTime(input.scheduledAt))}</dd></div>
+    </dl>${input.actions ? `<p class="chat-answer"><strong>Recommended actions</strong><br>${html(input.actions)}</p>` : ''}
+    <div class="buttons"><button class="small" data-close>Back to editing</button>
+      <button class="small primary" data-confirm-simulation>${input.scheduledAt===null?'Create incident':'Schedule incident'}</button></div>`);
+}
+
+function templateValues(index) {
+  return {...simulationTemplates[index],trigger:'immediate',status:'reported'};
+}
+
+async function createIncidents(values,batch = false) {
+  const firstId = await createSimulationBatch(values,batch);
+  if (!firstId) return;
+  simulatorDraft = {};
+  if (dialog.open) dialog.close();
+  if (workspace.custom[firstId]?.triggeredAt !== null) openCase(firstId);
+  else render();
+}
+
+async function createSimulationBatch(values,batch) {
+  let firstId;
+  const succeeded = await update(state=>{
+    const now = Date.now();
+    const inputs = values.map(item=>validateSimulation(item,serviceNames,now));
+    if (Object.keys(state.custom).length+inputs.length > 100) throw Error('This workspace holds up to 100 custom simulations. Delete a test event or reset the simulator.');
+    for (const input of inputs) {
+      const id = 'SIM-' + crypto.randomUUID().split('-').at(-1).toUpperCase();
+      const record = createSimulation(input,actor,now,id);
+      state.custom[id] = record;
+      publishSimulation(state,record,now);
+      firstId ||= id;
+    }
+    if (!batch && inputs[0].scheduledAt) return 'Test incident scheduled.';
+  });
+  return succeeded ? firstId : undefined;
+}
+
+function openCase(id) {
+  if (!byId(id)) return;
+  if (dialog.open) dialog.close();
+  choose(id);
+  if (view()==='desk') render();
+  else location.hash='desk';
+  requestAnimationFrame(()=>document.querySelector('.case h2')?.focus({preventScroll:false}));
+}
+
+function simulationCase(incident,tab,result) {
+  if (tab==='runbook') return incidentRunbooks(result);
+  if (tab==='trace') return trace(result);
+  if (tab==='replay') return replay(incident,result);
+  if (tab==='compare') return compare(incident,result);
+  const activity = incident.activity.slice().reverse().map(item=>`<li><div class="row"><strong>${html(item.status)}${item.level?' · '+simulationSeverities[item.level]:''}</strong>
+    <small>${html(formatIncidentTime(item.time))}</small></div><small>${html(item.who)}</small>
+    ${item.note?`<p class="chat-answer">${html(item.note)}</p>`:''}</li>`).join('');
+  return `<div class="lead simulation-lead"><h3>Reported symptoms</h3><p class="chat-answer">${html(incident.description)}</p></div>
+    <dl class="case-facts">
+      <div><dt>Category and type</dt><dd>${html(incident.category)} · ${html(incident.type)}</dd></div>
+      <div><dt>Incident timestamp</dt><dd>${html(formatIncidentTime(incident.occurredAt))}</dd></div>
+      <div><dt>Created</dt><dd>${html(formatIncidentTime(incident.createdAt))}</dd></div>
+      <div><dt>${incident.triggeredAt===null?'Scheduled trigger':'Alert triggered'}</dt><dd>${html(formatIncidentTime(incident.triggeredAt ?? incident.scheduledAt))}</dd></div>
+      ${incident.location?`<div><dt>Location</dt><dd>${html(incident.location)}</dd></div>`:''}
+      ${incident.area?`<div><dt>Affected area</dt><dd>${html(incident.area)}</dd></div>`:''}
+      <div><dt>Latest responder</dt><dd>${html(incident.responder || 'Unassigned')}</dd></div>
+    </dl>
+    <section class="panel block"><h3>Recommended next step</h3><p class="chat-answer">${html(incident.next)}</p></section>
+    <section class="panel block"><h3>Incident activity</h3><ol class="archive">${activity}</ol></section>`;
+}
+
+function editSimulation(record, status) {
+  const heading = {acknowledged:'Acknowledge incident',resolved:'Resolve incident'}[status];
+  openDialog(record.id+' / Test event',heading || 'Update incident',`
+    <p><strong>${html(record.title)}</strong></p>
+    <form class="simulation-form" data-edit-simulation="${record.id}">
+      <label>Status<select name="status">${options(Object.entries(simulationStatuses),status ?? record.status)}</select></label>
+      <label>Severity<select name="level">${options(Object.entries(simulationSeverities),record.level)}</select></label>
+      <label class="wide">Update note <small>Optional</small><textarea name="note" rows="3" maxlength="500"></textarea></label>
+      <div class="buttons wide"><button type="button" class="small" data-close>Cancel</button>
+      <button class="small primary" type="submit">${heading || 'Save update'}</button></div>
+    </form>`);
+}
+
+function deleteSimulations(state,ids) {
+  const targets = new Set(ids.filter(id=>state.custom[id]));
+  for (const id of targets) {
+    delete state.custom[id];
+    delete state.tasks[id];
+    delete state.priorities[id];
+  }
+  for (const key of Object.keys(state.notes)) {
+    if (targets.has(key.split('/')[0])) delete state.notes[key];
+  }
+  state.active = state.active.filter(id=>!targets.has(id));
+  state.notifications = state.notifications.filter(entry=>!targets.has(entry.id));
+}
+
 function desk() {
-  const queue = workspace.active.map(byId).filter(Boolean).sort((a,b)=>incidentPriority(a).localeCompare(incidentPriority(b)));
-  const incident = byId(selected) || queue[0];
+  const queue = openIncidents().sort((a,b)=>incidentPriority(a).localeCompare(incidentPriority(b)));
+  const incident = byId(selected) || queue[0] || scenarios[0];
+  const custom = workspace.custom[incident.id];
   const result = investigate(incident,cutoff);
+  const severityCounts = Object.keys(simulationSeverities).map(level=>({
+    level,count:queue.filter(item=>incidentPriority(item)===level).length,
+  }));
   const content = {brief:()=>brief(incident,result), details:()=>caseDetails(incident,result), runbook:()=>incidentRunbooks(result), trace:()=>trace(result), replay:()=>replay(incident,result), compare:()=>compare(incident,result)};
   return `<section class="hero intro"><div><div class="kicker">On-call desk / Brampton AI Innovator</div><h1>THE INCIDENT <em>DESK.</em></h1><p>Review alerts, follow the evidence, and get an engineer on the case.</p></div>
     <div class="radar" aria-hidden="true"><i style="--size:56px"></i><i style="--size:107px"></i><i style="--size:154px"></i><b style="--x:43%;--y:37%"></b><b style="--x:73%;--y:59%"></b><b style="--x:57%;--y:74%"></b><span class="mono">DEMO SIGNAL</span></div></section>
-    <div class="stats"><div class="stat"><strong>${services.length}</strong><small>Services monitored</small></div><div class="stat"><strong>${queue.length}</strong><small>Active incidents</small></div>
-    <div class="stat"><strong>${queue.filter(item=>incidentPriority(item)==='P1').length}</strong><small>Urgent incidents</small></div><div class="stat"><strong>${history.length}</strong><small>Archived incidents</small></div></div>
+    <div class="stats"><div class="stat"><strong data-stat="services">${services.length}</strong><small>Services monitored</small></div><div class="stat"><strong data-stat="active">${queue.length}</strong><small>Active incidents</small></div>
+    <div class="stat"><strong data-stat="urgent">${queue.filter(item=>incidentPriority(item)==='P1').length}</strong><small>Urgent incidents</small></div><div class="stat"><strong data-stat="archived">${history.length+Object.values(workspace.custom).filter(test=>test.triggeredAt!==null && test.status==='resolved').length}</strong><small>Archived incidents</small></div></div>
     <div class="desk">
       <aside class="queue"><div class="section-top"><h2>Alert queue</h2><span class="badge neutral">SIMULATION</span></div>
-      ${queue.map(item=>`<button class="queue-item" data-case="${item.id}" aria-pressed="${item.id===selected}"><span class="row"><span>${badge(incidentPriority(item))} <small>${severityNames[incidentPriority(item)]}</small></span><small class="mono">${item.alert} ET</small></span><strong>${html(item.title)}</strong><small>${html(item.service)} · ${item.variant}</small></button>`).join('')}
-      <div class="simulate"><div class="simulate-head"><span class="kicker">Simulate an alert</span><button class="small" data-reset>Reset</button></div>
+      <ul class="severity-chart" aria-label="Active incidents by priority">${severityCounts.map(({level,count})=>
+        `<li><span class="badge ${level}">${level}</span><span class="severity-track" aria-hidden="true"><i class="${level}" style="--share:${count/(queue.length || 1)}"></i></span><strong aria-label="${count} active">${count}</strong></li>`).join('')}</ul>
+      ${queue.map(item=>`<button class="queue-item ${workspace.custom[item.id] && item.triggeredAt>Date.now()-10000?'fresh-incident':''}" data-case="${item.id}" aria-pressed="${item.id===incident.id}"><span class="row"><span>${badge(incidentPriority(item))} <small>${levelName(incidentPriority(item),Boolean(workspace.custom[item.id]))}</small></span><small class="mono">${item.alert} ET</small></span><strong>${html(item.title)}</strong><small>${html(item.service)} · ${item.variant}</small></button>`).join('') || '<p class="quiet">No active incidents.</p>'}
+      <div class="simulate"><div class="simulate-head"><span class="kicker">Prepared alerts</span><button class="small" data-reset>Reset prepared alerts</button></div>
       <p class="small quiet" data-auto-telegram-hint>${automaticTelegram?'New simulations automatically send to Telegram.':'Simulations stay in the dashboard while Telegram automation is off.'}</p>
       <div class="buttons">${scenarios.map(item=>`<button class="small" data-trigger="${item.id}">${item.variant}</button>`).join('')}</div></div></aside>
-      <article class="case"><div class="case-head"><div class="case-top"><span class="case-meta">${incident.id} / ${html(incident.service)} / ${incident.alert} ET</span><div class="actions"><button class="small" data-handoff>Draft handoff</button><button class="primary small" data-assistant>✳ Ask assistant</button></div></div>
-      <h2>${html(incident.title)}</h2><div class="row"><p>${badge(incidentPriority(incident))} <small>${incident.variant}${cutoff === '23:59' ? '' : ' · Replay through ' + cutoff + ' ET'}</small></p><button class="small" data-priority>Change priority</button></div></div>
-      ${taskBar(incident)}
-      <div class="tabs" role="group" aria-label="Incident details">${tabs.map(([key,label])=>`<button class="tab" data-tab="${key}" aria-pressed="${key===activeTab}">${label}</button>`).join('')}</div>
-      <div class="case-content" id="case-content">${content[activeTab]()}</div></article>
+      <article class="case"><div class="case-head"><div class="case-top"><span class="case-meta">${incident.id} / ${html(incident.service)} / ${incident.alert} ET</span>
+      <div class="actions">${custom?.triggeredAt===null ? '' : '<button class="small" data-handoff>Draft handoff</button><button class="primary small" data-assistant>✳ Ask assistant</button>'}</div></div>
+      <h2 tabindex="-1">${html(incident.title)}</h2><div class="row"><p>${badge(incidentPriority(incident))} ${custom ? testBadge+' <span class="status-chip">'+testStatus(custom)+'</span>' : `<small>${incident.variant}</small>`}
+      ${cutoff === '23:59' ? '' : ' <small>· Replay through ' + cutoff + ' ET</small>'}</p>
+      ${custom?'':'<button class="small" data-priority>Change priority</button>'}</div></div>
+      ${custom ? `<div class="handoff"><div class="buttons">
+        ${custom.triggeredAt!==null ? `${custom.status==='reported'?'<button class="small primary" data-test-status="acknowledged">Acknowledge</button>':''}
+        <button class="small" data-test-status="update">Update incident</button>${custom.status!=='resolved'?'<button class="small" data-test-status="resolved">Resolve</button>':''}` : ''}
+        <button class="small danger" data-delete-custom="${custom.id}">${custom.triggeredAt===null?'Cancel schedule':'Delete test event'}</button></div></div>` : taskBar(incident)}
+      ${custom?.triggeredAt===null ? '' : `<div class="tabs" role="group" aria-label="Incident details">${tabs.filter(([key])=>!custom || key!=='details').map(([key,label])=>`<button class="tab" data-tab="${key}" aria-pressed="${key===activeTab}">${label}</button>`).join('')}</div>`}
+      <div class="case-content" id="case-content">${custom ? simulationCase(incident,activeTab,result) : content[activeTab]()}</div></article>
     </div>`;
 }
 
@@ -281,14 +600,22 @@ function layout(title, detail, content, search = false) {
     ${search ? '<input id="search" type="search" aria-label="Filter records" placeholder="Filter records…">' : ''}</div>${content}</section>`;
 }
 function serviceList() {
+  const incidents = openIncidents();
   return services.filter(service=>`${service.name} ${service.group}`.toLowerCase().includes(query)).map(service=>{
-    const confirmed = workspace.active.map(byId).find(incident=>incident.confirmed.includes(service.name));
-    const possible = workspace.active.map(byId).find(incident=>incident.possible.includes(service.name));
-    return `<button data-service="${html(service.name)}"><small class="mono">${service.group}</small><strong>${html(service.name)}</strong><small>${confirmed ? '● Incident confirmed' : possible ? '◌ Possible impact' : '○ No active alert'}</small></button>`;
+    const confirmed = incidents.find(incident=>incident.confirmed.includes(service.name));
+    const possible = incidents.find(incident=>incident.possible.includes(service.name));
+    const label = confirmed ? (workspace.custom[confirmed.id] ? '● Active test event' : '● Incident confirmed')
+      : possible ? '◌ Possible impact' : '○ No active alert';
+    return `<button data-service="${html(service.name)}"><small class="mono">${service.group}</small><strong>${html(service.name)}</strong><small>${label}</small></button>`;
   }).join('') || '<p>No services match the filter.</p>';
 }
 function historyList() {
-  return history.filter(record=>Object.values(record).join(' ').toLowerCase().includes(query)).map(record=>`<li class="row"><div><span class="mono quiet">${record.date} · ${record.id}</span><h3>${html(record.title)}</h3><p>${html(record.service)} · ${html(record.responder)} · ${record.fix ? 'Fix documented' : 'Fix missing'}</p></div><div>${badge(record.priority)} ${ref(record.id)}</div></li>`).join('') || '<li>No incidents match the filter.</li>';
+  const resolved = Object.values(workspace.custom).filter(record=>record.triggeredAt!==null && record.status==='resolved')
+    .sort((a,b)=>b.updatedAt-a.updatedAt).map(record=>({...record,test:true,date:formatIncidentTime(record.updatedAt),priority:record.level}));
+  return [...resolved,...history].filter(record=>[...Object.values(record),record.test?'test event':''].join(' ').toLowerCase().includes(query)).map(record=>
+    `<li class="row"><div><span class="mono quiet">${html(record.date)} · ${record.id}</span><h3>${html(record.title)}</h3>
+    <p>${html(record.service)} · ${html(record.responder || record.owner)} · ${record.test ? 'Resolved test event' : record.fix ? 'Fix documented' : 'Fix missing'}</p></div>
+    <div class="buttons">${badge(record.priority)} ${record.test ? `<button class="small" data-open-case="${record.id}">View incident</button>` : ref(record.id)}</div></li>`).join('') || '<li>No incidents match the filter.</li>';
 }
 function documentList() {
   return documents.filter(document=>[document.id,document.title,document.service,document.kind,document.useWhen,document.incident].join(' ').toLowerCase().includes(query)).map(document=>`
@@ -297,33 +624,45 @@ function documentList() {
 }
 function calendar() {
   const recent = scenarios.flatMap(incident=>incident.events.filter(event=>['Change','Maintenance'].includes(event.kind)).map(event=>({...event,service:incident.service}))).sort((a,b)=>b.time.localeCompare(a.time));
+  const monthCodes = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const dayFormat = new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit'});
+  const simulated = Object.values(workspace.custom).map(record=>{
+    const timestamp = record.triggeredAt ?? record.scheduledAt;
+    const date = Object.fromEntries(dayFormat.formatToParts(timestamp).map(part=>[part.type,part.value]));
+    return {...record,month:Number(date.year)*12+Number(date.month)-1,day:Number(date.day),
+      date:formatIncidentTime(timestamp),kind:record.triggeredAt===null?'Scheduled test event':'Test event',test:true};
+  });
   const records = [
     ...history.map(record=>({...record,kind:'Archived incident'})),
     ...recent.map(record=>({...record,date:'Nov 21'})),
     ...upcoming,
-  ];
-  const month = ['Sep','Oct','Nov'][calendarMonth-8];
-  const monthName = ['September','October','November'][calendarMonth-8];
-  const visible = records.filter(record=>record.date.startsWith(month + ' '));
-  const byDay = day => visible.filter(record=>record.date === `${month} ${String(day).padStart(2,'0')}`);
-  const firstDay = new Date(Date.UTC(2026,calendarMonth,1)).getUTCDay();
-  const days = new Date(Date.UTC(2026,calendarMonth+1,0)).getUTCDate();
+  ].map(record=>({...record,month:2026*12+monthCodes.indexOf(record.date.slice(0,3)),day:Number(record.date.slice(4))}));
+  const year = Math.floor(calendarMonth/12);
+  const month = calendarMonth%12;
+  const monthTitle = value=>new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',month:'long',year:'numeric'}).format(new Date(Date.UTC(Math.floor(value/12),value%12,1)));
+  const monthName = monthTitle(calendarMonth);
+  const visible = [...records,...simulated].filter(record=>record.month===calendarMonth);
+  const byDay = day => visible.filter(record=>record.day===day);
+  const firstDay = new Date(Date.UTC(year,month,1)).getUTCDay();
+  const days = new Date(Date.UTC(year,month+1,0)).getUTCDate();
   const grid = Array.from({length:days},(_,index)=>{
     const day = index+1;
     const count = byDay(day).length;
     return `<button data-calendar-day="${day}" aria-pressed="${day===calendarDay}" aria-label="${monthName} ${day}, ${count} records">${day}${count ? `<span class="calendar-count">${count}</span>` : ''}</button>`;
   }).join('');
-  const items = (calendarDay ? byDay(calendarDay) : visible).sort((a,b)=>
-    Number(a.date.slice(4))-Number(b.date.slice(4)) || (a.time || '').localeCompare(b.time || '')
-  ).map(record=>`<li class="row"><div><span class="mono">${record.date}${record.time ? ' · ' + record.time + ' ET' : ''}</span><br><strong>${html(record.title)}</strong><br><small>${html(record.service)} · ${record.kind}</small></div>${record.id ? ref(record.id) : ''}</li>`).join('');
-  return layout('Change calendar.','Browse archived incidents, releases, and scheduled maintenance.',`<div class="duo">
-    <section class="panel"><div class="row"><h2>${monthName} 2026</h2><label><span class="sr-only">Calendar month</span><select id="calendar-month">${['September','October','November'].map((value,index)=>`<option value="${index+8}" ${index+8===calendarMonth?'selected':''}>${value}</option>`).join('')}</select></label></div>
-    <div class="calendar-grid" role="group" aria-label="${monthName} 2026 dates">${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(day=>`<small>${day}</small>`).join('')}${'<span></span>'.repeat(firstDay)}${grid}</div></section>
-    <section class="panel"><div class="row"><h2>${calendarDay ? monthName + ' ' + calendarDay : 'Month agenda'}</h2>${calendarDay ? '<button class="small" data-calendar-all>Show month</button>' : ''}</div><ul class="archive">${items || '<li>No records on this date.</li>'}</ul></section></div>`);
+  const items = (calendarDay ? byDay(calendarDay) : visible).sort((a,b)=>a.day-b.day || (a.time || '').localeCompare(b.time || ''))
+    .map(record=>`<li class="row"><div><span class="mono">${html(record.date)}${record.time ? ' · ' + record.time + ' ET' : ''}</span><br><strong>${html(record.title)}</strong><br>
+    <small>${html(record.service)} · ${html(record.kind)}</small></div>${record.test ? `<button class="small" data-open-case="${record.id}">View incident</button>` : record.id ? ref(record.id) : ''}</li>`).join('');
+  const months = [...new Set([calendarMonth,calendarMonth-1,calendarMonth+1,...records.map(record=>record.month),...simulated.map(record=>record.month)])].sort((a,b)=>a-b);
+  return layout('Change calendar.','Browse changes, incident history, and upcoming test events.',`<div class="duo">
+    <section class="panel"><div class="row"><h2>${monthName}</h2><label><span class="sr-only">Calendar month</span><select id="calendar-month">${options(months.map(value=>[value,monthTitle(value)]),calendarMonth)}</select></label></div>
+    <div class="calendar-grid" role="group" aria-label="${monthName} dates">${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(day=>`<small>${day}</small>`).join('')}${'<span></span>'.repeat(firstDay)}${grid}</div></section>
+    <section class="panel"><div class="row"><h2>${calendarDay ? 'Day ' + calendarDay : 'Month agenda'}</h2>${calendarDay ? '<button class="small" data-calendar-all>Show month</button>' : ''}</div><ul class="archive">${items || '<li>No records on this date.</li>'}</ul></section></div>`);
 }
 function chat() {
   const records = workspace.messages.map(message=>{
     const incident = byId(message.id);
+    if (!incident) return '';
     const available = workspace.tasks[message.id]?.status === 'open';
     const time = new Date(message.time).toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'2-digit',minute:'2-digit'});
     return `<li><small class="mono">${html(time)} ET · ${message.type === 'open' ? 'INCIDENT COMPASS / @TEAM' : 'OWNERSHIP CONFIRMED'}</small>
@@ -334,38 +673,77 @@ function chat() {
   return layout('# General.','Simulated team chat. Switch teammates at the top to test the handoff.',`<ul class="channel">${records || '<li>No escalations. Page an engineer from the urgent incident to try it.</li>'}</ul>`);
 }
 
-function alertInbox() {
-  const incidents = workspace.active.map(byId).filter(Boolean).sort((a,b)=>incidentPriority(a).localeCompare(incidentPriority(b)));
-  const cards = incidents.filter(item=>alertFilter==='all' || incidentPriority(item)===alertFilter).map(incident=>{
+function alertCards(incidents = openIncidents()) {
+  const sorted = [...incidents].sort((a,b)=>alertSort==='recent'
+    ? (b.triggeredAt ?? Date.parse('2026-11-21T'+b.alert+'-05:00'))-(a.triggeredAt ?? Date.parse('2026-11-21T'+a.alert+'-05:00'))
+    : incidentPriority(a).localeCompare(incidentPriority(b)));
+  return sorted.filter(item=>(alertFilter==='all' || incidentPriority(item)===alertFilter)
+    && [item.title,item.service,item.id,item.category,item.type,item.variant].join(' ').toLowerCase().includes(alertQuery)).map(incident=>{
     const level=incidentPriority(incident);
+    const custom = workspace.custom[incident.id];
     const alerts=incident.events.filter(event=>event.kind==='Alert');
     const task=workspace.tasks[incident.id];
-    const status=task?.status==='claimed' ? 'Accepted by ' + task.by : task?.status==='open' ? 'Waiting for a team claim'
+    const status=custom ? testStatus(custom) : task?.status==='claimed' ? 'Accepted by ' + task.by : task?.status==='open' ? 'Waiting for a team claim'
       : task?.status==='pending' ? 'Waiting for acknowledgement' : 'Needs review';
-    return `<li class="alert-card ${level}"><div class="row"><span class="badge ${level}">${level} · ${severityNames[level]}</span><small class="mono">${incident.id} · ${incident.alert} ET</small></div>
-      <h2>${html(incident.title)}</h2><p>${html(incident.service)} · ${incident.affectedPct}% affected in sample</p>
+    return `<li class="alert-card ${level}"><div class="row"><div class="buttons"><span class="badge ${level}">${level} · ${levelName(level,Boolean(custom))}</span>${custom?testBadge:''}</div><small class="mono">${incident.id} · ${incident.alert} ET</small></div>
+      <h2>${html(incident.title)}</h2><p>${html(incident.service)} · ${custom ? html(incident.type) : incident.affectedPct+'% affected in sample'}</p>
       <div class="references alert-sources" aria-label="Source alerts">${alerts.map(event=>ref(event.id)).join('')}</div>
-      <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button><button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button></div></div></li>`;
-  }).join('');
-  const stats = [['all','All alerts'],...levels.map(level=>[level,level+' '+severityNames[level]])].map(([level,label])=>
+      <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button>${custom ? '' : `<button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button>`}</div></div></li>`;
+  }).join('') || '<li>No alerts match these filters.</li>';
+}
+
+function alertInbox() {
+  const incidents = openIncidents();
+  const stats = [['all','All alerts'],['P1','P1 Critical'],['P2','P2 High'],['P3','P3 Medium / Monitor'],['P4','P4 Low']].map(([level,label])=>
     `<button class="small" aria-pressed="${alertFilter===level}" data-alert-filter="${level}">${label} (${level==='all' ? incidents.length : incidents.filter(item=>incidentPriority(item)===level).length})</button>`
   ).join('');
   return layout('Alert inbox.','Review alerts by urgency, open their evidence, and preview outgoing messages.',`
     <div class="row"><div class="buttons" role="group" aria-label="Filter by urgency">${stats}</div><div class="buttons"><span class="badge neutral" data-auto-telegram-badge>Telegram auto: ${automaticTelegram?'on':'off'}</span><button class="small" data-notify-telegram="">Send Telegram notification</button><button class="small" data-telegram-routing>Telegram routing</button><button class="small" data-channels>Delivery setup</button></div></div>
-    <ul class="alert-list">${cards || '<li>No alerts at this urgency level.</li>'}</ul>`);
+    <div class="alert-tools"><label>Find alerts<input id="alert-search" type="search" placeholder="Title, service, category…" value="${html(alertQuery)}"></label>
+    <label>Sort alerts<select id="alert-sort">${options([['severity','Severity'],['recent','Most recent']],alertSort)}</select></label></div>
+    <ul class="alert-list" id="alert-list">${alertCards(incidents)}</ul>`);
 }
 
 function render() {
   const page = view();
   const focused = document.activeElement;
   const focusKeys = focused && main.contains(focused) ? [...focused.attributes].filter(attribute=>attribute.name.startsWith('data-')) : [];
+  const focusedId = main.contains(focused) && focused.id;
+  const previousStats = new Map([...main.querySelectorAll('[data-stat]')].map(item=>[item.dataset.stat,Number(item.textContent)]));
+  const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const queuePositions = animate && page===renderedPage && page==='desk'
+    ? new Map([...main.querySelectorAll('.queue-item')].slice(0,12).map(item=>[item.dataset.case,item.getBoundingClientRect().top]))
+    : new Map();
   const content = {
-    desk, calendar, chat, alerts:alertInbox,
+    desk, calendar, chat, simulator, alerts:alertInbox,
     services:()=>layout('Service inventory.','The 30 fictional cloud services in this workspace.',`<div class="service-grid" id="list">${serviceList()}</div>`,true),
     history:()=>layout('Incident archive.','Compare previous causes, owners, priorities and documented fixes.',`<ul class="archive" id="list">${historyList()}</ul>`,true),
     runbooks:()=>layout('Runbook library.','Search the sample database for service procedures, recovery checks, and investigation guides.',`<ul class="archive" id="list">${documentList()}</ul>`,true)
   };
   main.innerHTML = content[page]();
+  if (page!==renderedPage) {
+    main.firstElementChild?.classList.add('page-enter');
+    renderedPage = page;
+    observeSectionReveals(animate);
+  } else {
+    revealObserver?.disconnect();
+  }
+  if (queuePositions.size) {
+    const shifts = [...main.querySelectorAll('.queue-item')].slice(0,12).map(item=>({
+      item,distance:queuePositions.get(item.dataset.case)-item.getBoundingClientRect().top,
+    }));
+    for (const {item,distance} of shifts) {
+      if (Number.isFinite(distance) && Math.abs(distance)>2) {
+        item.animate([{transform:`translateY(${distance}px)`},{transform:'translateY(0)'}],{
+          duration:230,easing:'cubic-bezier(.2,.75,.25,1)'
+        });
+      }
+    }
+  }
+  for (const item of main.querySelectorAll('[data-stat]')) {
+    const previous = previousStats.get(item.dataset.stat);
+    if (previous!==undefined && previous!==Number(item.textContent)) item.classList.add('stat-updated');
+  }
   document.querySelectorAll('[data-view]').forEach(link=> {
     if (link.dataset.view === page) link.setAttribute('aria-current','page');
     else link.removeAttribute('aria-current');
@@ -374,12 +752,40 @@ function render() {
   const countLabel = document.querySelector('#chat-count');
   countLabel.hidden = !count;
   countLabel.textContent = count;
-  document.querySelector('#notifications').textContent = workspace.notifications?.length ? `Notifications (${workspace.notifications.length})` : 'Notifications';
+  const unread = workspace.notifications.filter(entry=>!entry.read).length;
+  const unreadBadge = document.querySelector('#notification-count');
+  unreadBadge.hidden = !unread;
+  unreadBadge.textContent = unread>99 ? '99+' : unread;
+  document.querySelector('#notifications').setAttribute('aria-label',unread ? `Notifications, ${unread} unread` : 'Notifications');
+  if (notificationHistory && dialog.open) refreshNotificationHistory();
   const search = document.querySelector('#search');
   if (search) search.value = query;
   if (focusKeys.length) {
     const selector = focusKeys.map(key=>`[${key.name}="${CSS.escape(key.value)}"]`).join('');
     main.querySelector(selector)?.focus({preventScroll:true});
+  } else if (focusedId) {
+    document.getElementById(focusedId)?.focus({preventScroll:true});
+  } else if (page==='simulator' && focused?.name && focused.closest('#simulation-form')) {
+    document.querySelector('#simulation-form').elements.namedItem(focused.name)?.focus({preventScroll:true});
+  }
+}
+
+function observeSectionReveals(animate) {
+  revealObserver?.disconnect();
+  if (!animate || !('IntersectionObserver' in window)) return;
+  revealObserver = new IntersectionObserver((entries,observer)=>{
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      entry.target.classList.remove('awaiting-reveal');
+      entry.target.classList.add('section-revealed');
+      observer.unobserve(entry.target);
+    }
+  },{rootMargin:'0px 0px 28px'});
+  const belowFold = [...main.querySelectorAll('.template-card,.simulator-grid,.alert-card,.service-grid button')]
+    .filter(element=>element.getBoundingClientRect().top>window.innerHeight+60);
+  for (const element of belowFold) {
+    element.classList.add('awaiting-reveal');
+    revealObserver.observe(element);
   }
 }
 
@@ -390,8 +796,10 @@ function choose(id) {
   cutoff = '23:59';
 }
 function openDialog(kicker,title,content) {
+  notificationHistory = false;
   dialog.innerHTML = `<div class="dialog-head"><div><div class="kicker">${html(kicker)}</div><h2 id="dialog-title">${html(title)}</h2></div><button data-close aria-label="Close dialog">✕</button></div><div class="dialog-body">${content}</div>`;
   if (!dialog.open) dialog.showModal();
+  else dialog.querySelector('[data-close]').focus({preventScroll:true});
 }
 function source(id) {
   const document = documents.find(item=>item.id===id);
@@ -413,7 +821,7 @@ function source(id) {
       ${procedure ? `<div class="block">${documentLink(procedure)}</div>` : '<p class="quiet">No runbook is linked to this archive record.</p>'}`);
     return;
   }
-  const event = scenarios.flatMap(item=>item.events).find(item=>item.id===id);
+  const event = [...scenarios,...Object.values(workspace.custom).map(asInvestigation)].flatMap(item=>item.events).find(item=>item.id===id);
   if (event) openDialog(event.kind + ' / ' + id,event.title,`<p>${html(event.detail)}</p><p class="mono">Occurred ${event.time} ET · Available ${event.seen} ET</p>`);
 }
 function draft() {
@@ -426,6 +834,7 @@ function draft() {
   const note = [
     `${incident.id} · ${incident.title} · ${incidentPriority(incident)}`,
     `Owner: ${workspace.tasks[incident.id]?.by || 'Not confirmed'}`,
+    workspace.custom[incident.id] && 'Test event · Submitted symptoms: ' + incident.description,
     `Working hypothesis: ${result.cause}`,
     `Evidence: ${incident.causeSources.join(', ')}`,
     result.alternative && `Alternative: ${incident.alternative} [${result.alternative.id}]`,
@@ -441,13 +850,65 @@ function draft() {
 }
 
 function showNotifications() {
-  const entries = (workspace.notifications || []).map(entry=>{
-    const level=levels.includes(entry.level) ? entry.level : incidentPriority(byId(entry.id));
-    return `<li><div class="row"><strong>${html(entry.title)}</strong><span class="badge ${level}">${level} · ${severityNames[level]}</span></div>
-    <p>${html(entry.description)}</p><button class="small" data-open-case="${html(entry.id)}">Open ${html(entry.id)}</button></li>`;
-  }).join('');
-  openDialog('Demo workspace','Notifications',`<p class="quiet">Simulated in-app alert and handoff activity.</p>
-    <ul class="archive">${entries || '<li>Trigger a sample alert to see it here.</li>'}</ul>`);
+  openDialog('Incident desk','Notifications',`
+    <div class="notification-toolbar row">
+      <span class="quiet small" data-unread-summary></span><div class="buttons">
+      <button class="small" data-mark-all>Mark all as read</button>
+      <button class="small" data-toggle-sound aria-pressed="${sound}">Sound ${sound?'on':'off'}</button></div></div>
+    <ul class="notification-history" data-notification-history></ul>`);
+  notificationHistory = true;
+  refreshNotificationHistory();
+}
+
+function refreshNotificationHistory() {
+  const list = dialog.querySelector('[data-notification-history]');
+  if (!list) return;
+  const expanded = new Set([...list.querySelectorAll('details[open]')].map(detail=>detail.dataset.noticeKey));
+  const focused = document.activeElement;
+  const focusKey = focused?.dataset?.markNotice || focused?.closest('[data-notice-key]')?.dataset.noticeKey;
+  const unread = workspace.notifications.filter(entry=>!entry.read).length;
+  dialog.querySelector('[data-unread-summary]').textContent = unread ? `${unread} unread` : 'You’re caught up';
+  dialog.querySelector('[data-mark-all]').disabled = !unread;
+  list.innerHTML = workspace.notifications.map(entry=>{
+    const level = Object.hasOwn(simulationSeverities,entry.level) ? entry.level : incidentPriority(byId(entry.id));
+    return `<li class="notification-record ${level} ${entry.read?'':'unread'}">
+      <details data-notice-key="${html(entry.key)}" ${expanded.has(entry.key)?'open':''}>
+        <summary><span class="badge ${level}">${levelName(level,entry.test)}</span><strong>${html(entry.title)}</strong>
+        <small>${entry.read?'Read':'Unread'}${entry.test?' · Test event':''}</small></summary>
+        <p>${html(entry.description)}</p><p class="small quiet">${html(formatIncidentTime(entry.time))}</p><div class="buttons">
+          ${byId(entry.id)?`<button class="small" data-open-case="${html(entry.id)}" data-read-notice="${html(entry.key)}">View incident</button>`:''}
+          ${entry.read?'':`<button class="small" data-mark-notice="${html(entry.key)}">Mark as read</button>`}
+        </div>
+      </details></li>`;
+  }).join('') || '<li>No notifications yet. Run a simulation to see one here.</li>';
+  if (focusKey) list.querySelector(`[data-notice-key="${CSS.escape(focusKey)}"] summary`)?.focus({preventScroll:true});
+  else if (focused?.matches('[data-mark-all]') && !unread) dialog.querySelector('[data-toggle-sound]').focus({preventScroll:true});
+}
+
+function markNotices(key) {
+  return update(state=>{
+    for (const entry of state.notifications) {
+      if (!key || entry.key===key) entry.read = true;
+    }
+  });
+}
+
+async function toggleSound(button) {
+  try {
+    if (!sound) {
+      audio ||= new AudioContext();
+      await audio.resume();
+    }
+    sound = !sound;
+    localStorage.setItem('ic-notification-sound',String(sound));
+    if (button.isConnected) {
+      button.textContent = sound ? 'Sound on' : 'Sound off';
+      button.setAttribute('aria-pressed',String(sound));
+    }
+    if (sound) notificationSound(false);
+  } catch {
+    if (button.isConnected) button.textContent = 'Sound unavailable';
+  }
 }
 
 async function deliveryApi(action,payload) {
@@ -836,6 +1297,22 @@ function changePriority() {
 function fallback(incident,result,question) {
   if (!result.observed) return 'The incident had not fired in this snapshot. Move the replay forward to see the brief.';
   const q = question.toLowerCase();
+  if (workspace.custom[incident.id]) {
+    if (/runbook|document|similar|before|fix|compar/.test(q)) {
+      return ['The submitted report has no verified matching fix.',...result.relatedDocuments.map(document=>
+        `Reference only: [${document.id}] ${document.title}. ${document.useWhen}`),`First check: ${incident.next}`].join('\n\n');
+    }
+    if (/verif|recovery|resolved/.test(q)) return [incident.verify,incident.activity.findLast(item=>item.note)?.note].filter(Boolean).join('\n\n');
+    if (/priorit|urgent|impact|cost|money/.test(q)) {
+      return `This test event is ${simulationSeverities[incident.level]} (${incident.level}). The reported scope is ${incident.area || incident.service}. The report provides no measured customer impact or loss estimate.`;
+    }
+    return [
+      `Test event · ${simulationSeverities[incident.level]} · ${testStatus(incident)}`,
+      `Reported for ${incident.service}: ${incident.description}`,
+      'The submitted report contains no verified cause.',
+      `Recommended next step: ${incident.next}`,
+    ].join('\n\n');
+  }
   if (/verif|recovery|resolved/.test(q) && result.guide) {
     return `[${result.guide.id}] ${result.guide.verify}\n\n${incident.verify}`;
   }
@@ -872,7 +1349,7 @@ function assistant() {
   }
   const incident = byId(selected);
   assistantWindow.innerHTML = `<div class="dialog-head"><div><div class="kicker">Incident assistant / ${incident.id}</div><h2 id="assistant-title">Ask about this incident</h2></div><button data-close aria-label="Close assistant">✕</button></div><div class="dialog-body">
-    <p class="quiet" id="assistant-mode">${connected ? 'Gemini · Uses the selected evidence snapshot.' : 'Demo mode · Answers come from the sample records.'}</p>
+    <p class="quiet" id="assistant-mode">${workspace.custom[incident.id] ? 'Test event · Uses the local report and sample library.' : connected ? 'Gemini · Uses the selected evidence snapshot.' : 'Demo mode · Answers come from the sample records.'}</p>
     <div class="buttons">${['What happened, in detail?', 'Which runbook should I use?', incident.document==='DG-023' ? 'What would distinguish the likely causes?' : 'Have we seen this before?', 'How should I verify recovery?'].map(q=>`<button class="small" data-prompt="${html(q)}">${html(q)}</button>`).join('')}</div>
     <form id="assistant-form"><input id="question" aria-label="Ask the incident assistant" maxlength="400" placeholder="Ask about the evidence…" required>
     <button class="primary" type="submit">Ask</button><button type="button" data-mic title="Speak a question using browser dictation">Mic</button></form>
@@ -913,8 +1390,9 @@ async function ask(question, speak = false) {
   const revision = ++dialogRevision;
   let reply = fallback(incident,result,question);
   let ids = [...new Set(reply.match(/\b(?:INC|RB|DG|ALT|CHG|LOG|MET|SUP|EXT|MNT)-\d+\b/g) || [])];
-  let label = 'Demo mode · Based on sample records.';
-  if (connected) {
+  if (workspace.custom[incident.id] && result.observed) ids.unshift(incident.causeSources[0]);
+  let label = workspace.custom[incident.id] ? 'Test event · Based on the local report.' : 'Demo mode · Based on sample records.';
+  if (connected && !workspace.custom[incident.id]) {
     try {
       const earlierQuestions = conversation.map(turn=>turn.question);
       const response = await fetch('/api/ask', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:incident.id,cutoff:snapshot,question,earlierQuestions})});
@@ -979,11 +1457,27 @@ function listen() {
 }
 
 document.addEventListener('click',event=>{
+  if (event.isTrusted && sound && audio?.state!=='running') {
+    try {
+      audio ||= new AudioContext();
+      void audio.resume().catch(()=>{});
+    } catch { /* Playback is optional on browsers without Web Audio. */ }
+  }
   const button = event.target.closest('button');
   if (!button) return;
   const data = button.dataset;
-  if (data.case) { choose(data.case); render(); }
-  else if (data.openCase) { choose(data.openCase); if (view() === 'desk') render(); else location.hash = 'desk'; }
+  if (data.dismissToast) dismissToast(data.dismissToast);
+  else if (data.markNotice) void markNotices(data.markNotice);
+  else if ('markAll' in data) void markNotices();
+  else if ('toggleSound' in data) void toggleSound(button);
+  else if (data.case) { choose(data.case); render(); }
+  else if (data.openCase) {
+    if (data.readNotice) {
+      dismissToast(data.readNotice);
+      void markNotices(data.readNotice);
+    }
+    openCase(data.openCase);
+  }
   else if (data.tab) { activeTab = data.tab; render(); }
   else if (data.nav) location.hash = data.nav;
   else if (data.task) actionOnTask(data.task,data.id);
@@ -995,10 +1489,51 @@ document.addEventListener('click',event=>{
       notification(state,incident.id,'Sample alert received',incident.title);
       if (incidentPriority(incident,state)==='P1' && !state.tasks[incident.id]) pageOnCall(state,incident);
       return `Simulated alert received: ${incident.title}.`;
-    }).then(()=>relayNewAlert(incident,incidentPriority(incident)));
+    }).then(saved=>{if (saved) return relayNewAlert(incident,incidentPriority(incident));});
   } else if ('reset' in data) {
     choose('INC-121');
-    void update(state=>{ Object.assign(state,initial()); return 'Demo workspace reset.'; });
+    void update(state=>{
+      const defaults = initial();
+      state.active = [...defaults.active,...state.active.filter(id=>state.custom[id])];
+      state.tasks = {};
+      state.messages = [];
+      state.priorities = {};
+      state.notifications = state.notifications.filter(entry=>state.custom[entry.id]);
+      state.notes = Object.fromEntries(Object.entries(state.notes).filter(([key])=>state.custom[key.split('/')[0]]));
+      return 'Prepared alerts reset.';
+    });
+  } else if ('loadTemplate' in data) {
+    simulatorDraft = templateValues(Number(data.loadTemplate));
+    render();
+    document.querySelector('#simulation-form input').focus();
+  } else if ('fireTemplate' in data || 'runBurst' in data || 'confirmSimulation' in data) {
+    button.disabled = true;
+    button.setAttribute('aria-busy','true');
+    const batch = 'runBurst' in data;
+    const entries = batch ? simulationTemplates.map((_,index)=>templateValues(index))
+      : ['fireTemplate' in data ? templateValues(Number(data.fireTemplate)) : {...simulatorDraft}];
+    void createIncidents(entries,batch).finally(()=>{
+      button.disabled=false;
+      button.removeAttribute('aria-busy');
+    });
+  } else if (data.testStatus && workspace.custom[selected]) {
+    editSimulation(workspace.custom[selected],data.testStatus==='update' ? undefined : data.testStatus);
+  } else if (data.deleteCustom || 'resetCustom' in data) {
+    const record = workspace.custom[data.deleteCustom];
+    const scheduled = record?.triggeredAt===null;
+    openDialog('Incident simulator',record ? (scheduled?'Cancel scheduled test?':'Delete test event?') : 'Reset custom simulations?',`
+      <p>${record ? `Remove ${html(record.title)} and its local notification history?`
+        : 'Remove every custom simulation and its local notifications, including scheduled events. Prepared incidents, runbooks, and Telegram settings are preserved.'}</p>
+      <div class="buttons"><button class="small" data-close>Keep test data</button>
+      <button class="small danger" data-confirm-delete="${record?.id || 'all'}">${record ? (scheduled?'Cancel schedule':'Delete test event') : 'Reset custom simulations'}</button></div>`);
+  } else if (data.confirmDelete) {
+    button.disabled = true;
+    void update(state=>{
+      const ids = data.confirmDelete==='all' ? Object.keys(state.custom) : [data.confirmDelete];
+      if (ids.includes(selected)) choose('INC-121');
+      deleteSimulations(state,ids);
+      return data.confirmDelete==='all' ? 'Custom simulations reset.' : 'Test event removed.';
+    }).then(saved=>{if (saved && button.isConnected) dialog.close(); else button.disabled = false;});
   } else if (data.source) source(data.source);
   else if ('live' in data) { cutoff='23:59'; render(); }
   else if ('handoff' in data) draft();
@@ -1084,10 +1619,9 @@ document.addEventListener('click',event=>{
     });
   } else if (data.service) {
     const service = services.find(item=>item.name===data.service);
-    const matching = workspace.active.map(byId).filter(item=>[...item.confirmed,...item.possible].includes(service.name));
-    openDialog(service.group, service.name, matching.length ? matching.map(item=>`<p>${html(item.title)} · ${item.confirmed.includes(service.name) ? 'Confirmed' : 'Possible'} impact</p><button class="small" data-open-case="${item.id}">Open ${item.id}</button>`).join('') : '<p>No active alerts in this sample workspace.</p>');
+    const matching = openIncidents().filter(item=>[...item.confirmed,...item.possible].includes(service.name));
+    openDialog(service.group, service.name, matching.length ? matching.map(item=>`<p>${html(item.title)} · ${workspace.custom[item.id] ? 'Test event' : item.confirmed.includes(service.name) ? 'Confirmed impact' : 'Possible impact'}</p><button class="small" data-open-case="${item.id}">Open ${item.id}</button>`).join('') : '<p>No active alerts in this sample workspace.</p>');
   }
-  if (data.openCase && dialog.open) dialog.close();
 });
 document.addEventListener('submit',event=>{
   if (event.target.id === 'assistant-form') {
@@ -1095,6 +1629,32 @@ document.addEventListener('submit',event=>{
     void ask(document.querySelector('#question').value);
   }
   const form=event.target;
+  if (form.id==='simulation-form') {
+    event.preventDefault();
+    simulatorDraft = {...simulatorDraft,...Object.fromEntries(new FormData(form))};
+    const feedback = form.querySelector('#simulation-error');
+    feedback.textContent = '';
+    try { previewSimulation(simulatorDraft); }
+    catch (error) { feedback.textContent = error.message; }
+    return;
+  }
+  if (form.matches('[data-edit-simulation]')) {
+    event.preventDefault();
+    const id = form.dataset.editSimulation;
+    const fields = Object.fromEntries(new FormData(form));
+    const submit = form.querySelector('[type=submit]');
+    submit.disabled = true;
+    void update(state=>{
+      const record = state.custom[id];
+      if (!record) throw Error('This test event was removed.');
+      const now = Date.now();
+      if (!updateSimulation(record,fields,actor,now)) return 'The incident is already up to date.';
+      if (record.status==='resolved') state.active = state.active.filter(item=>item!==id);
+      else if (!state.active.includes(id)) state.active.push(id);
+      notification(state,id,`${testStatus(record)} · ${record.title}`,fields.note.trim() || `Updated by ${actor}`);
+    }).then(saved=>{if (saved && submit.isConnected) dialog.close(); else submit.disabled=false;});
+    return;
+  }
   if(form.matches('[data-telegram-notice-form]')){
     event.preventDefault();
     const id=form.elements.incident.value;
@@ -1161,6 +1721,11 @@ document.addEventListener('submit',event=>{
   });
 });
 document.addEventListener('input',event=>{
+  if (event.target.form?.id==='simulation-form') simulatorDraft[event.target.name] = event.target.value;
+  if (event.target.id==='alert-search') {
+    alertQuery = event.target.value.trim().toLowerCase();
+    document.querySelector('#alert-list').innerHTML = alertCards();
+  }
   if (event.target.id === 'cost-window') {
     const money = byId(selected).money;
     const minutes = Number(event.target.value);
@@ -1182,6 +1747,20 @@ document.addEventListener('input',event=>{
   }
 });
 document.addEventListener('change',event=>{
+  if (event.target.name==='trigger' && event.target.form?.id==='simulation-form') {
+    const scheduled = event.target.value==='scheduled';
+    const label = event.target.form.querySelector('[data-scheduled-field]');
+    const timeInput = label.querySelector('input');
+    label.hidden = !scheduled;
+    timeInput.disabled = !scheduled;
+    timeInput.required = scheduled;
+    if (scheduled) timeInput.min = earliestLocalTrigger();
+    event.target.form.querySelector('[data-schedule-hint]').hidden = !scheduled;
+  }
+  if (event.target.id==='alert-sort') {
+    alertSort = event.target.value;
+    document.querySelector('#alert-list').innerHTML = alertCards();
+  }
   if (event.target.id === 'calendar-month') {
     calendarMonth = Number(event.target.value);
     calendarDay = undefined;
@@ -1206,13 +1785,26 @@ night.addEventListener('click',()=>{
 });
 window.addEventListener('storage',event=>{
   if (event.key !== saveKey) return;
+  const before = new Set(workspace.notifications.map(entry=>entry.key));
   workspace = read();
-  if (!workspace.active.includes(selected)) choose(workspace.active[0]);
+  if (!byId(selected)) choose(workspace.active[0] || 'INC-121');
   render();
+  discardRemovedToasts();
+  queueToasts(workspace.notifications.filter(entry=>!before.has(entry.key)).reverse());
 });
-window.addEventListener('hashchange',()=>{ query=''; render(); main.focus(); });
+window.addEventListener('hashchange',()=>{
+  if (location.hash==='#main') return;
+  document.querySelector('#nav-toggle').setAttribute('aria-expanded','false');
+  query=''; render(); main.focus();
+});
+document.querySelector('#nav-toggle').addEventListener('click',event=>{
+  const control = event.currentTarget;
+  control.setAttribute('aria-expanded',String(control.getAttribute('aria-expanded')!=='true'));
+});
+document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault(); main.focus();});
 window.addEventListener('focus',refreshAutomaticIndicator);
 refreshAutomaticIndicator();
-setInterval(tick,250);
+tick();
+setInterval(tick,500);
 if (location.protocol.startsWith('http')) fetch('/api/status').then(response=>response.json()).then(status=>{ connected=status.gemini; }).catch(()=>{});
 render();
