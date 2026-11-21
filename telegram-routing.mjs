@@ -52,6 +52,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
   let queue=Promise.resolve();
   let running=false;
   const pending=new Map();
+  const notices=new Map();
   const exclusive=operation=>{
     const result=queue.then(operation);
     queue=result.catch(()=>{});
@@ -116,6 +117,46 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     if(canStart && pending.size>=40)return {error:'Too many pending previews. Try again in a few minutes.'};
     if(canStart)pending.set(token,{incident:incident.id,level,wait,owner,team,bot:botId(config.token),expires:now()+5*60_000});
     return {token:canStart?token:null,canStart,messages,direct,team:team?.label,owner:owner?.label,missing:!config.token?'Connect Telegram first.':!team?'Pair a team group before starting live routing.':!direct&&!owner?'Choose a paired private responder.':null};
+  }
+  function noticeTarget(state,config,recipient) {
+    const {team,people}=targets(state,config);
+    if(recipient==='team'&&team)return {...team,group:true,label:`Everyone in ${team.label}`};
+    return people.find(person=>person.id===recipient);
+  }
+  async function previewNotice(input) {
+    const incident=scenarios.find(record=>record.id===input.incident);
+    const level=input.level;
+    if(!incident||typeof level!=='string'||!Object.hasOwn(presentations,level))return {error:'Choose a prepared incident and priority.'};
+    const [state,config]=await Promise.all([load(),connect()]);
+    const target=noticeTarget(state,config,input.recipient);
+    if(!config.token||!target)return {error:'Choose the paired team group or a paired private responder.'};
+    for(const [id,entry] of notices)if(entry.expires<=now())notices.delete(id);
+    if(notices.size>=40)return {error:'Too many notice previews. Try again shortly.'};
+    const token=randomUUID();
+    const message=renderTelegram(incident,level);
+    notices.set(token,{recipient:input.recipient,chat:target.chat,bot:botId(config.token),incident:incident.id,level,message,expires:now()+5*60_000});
+    return {token,incident:incident.id,level,text:message.text,label:target.label,destination:masked(target.chat),group:Boolean(target.group)};
+  }
+  async function sendNotice(input) {
+    if(input.confirm!==true)return {error:'Confirm the notification and recipient before sending.'};
+    return exclusive(async()=>{
+      const notice=notices.get(input.token);
+      if(!notice||notice.expires<=now())return {error:'This preview was used or expired. Open a new preview.'};
+      const [state,config]=await Promise.all([load(),connect()]);
+      const target=noticeTarget(state,config,notice.recipient);
+      if(!target||target.chat!==notice.chat||botId(config.token)!==notice.bot)return {error:'The recipient changed. Review a new preview.'};
+      if(typeof target.group==='string'){
+        const member=await call(config.token,'getChatMember',{chat_id:target.group,user_id:Number(target.chat)});
+        if(!currentMember(member))return {error:'This responder could not be verified as a current group member.'};
+      }
+      notices.delete(input.token);
+      const body={chat_id:target.chat,text:notice.message.markup,parse_mode:'HTML',link_preview_options:{is_disabled:true}};
+      if(target.group===true)body.reply_markup={inline_keyboard:teamButtons(state,{bot:notice.bot,team:target},false)};
+      const sent=await call(config.token,'sendMessage',body);
+      const accepted=sent.ok&&Number.isInteger(sent.result?.message_id);
+      return {incident:notice.incident,level:notice.level,channel:'telegram',destination:masked(target.chat),label:target.label,
+        status:accepted?'accepted':sent.http>=400&&sent.http<500?'rejected':'unknown',time:now()};
+    });
   }
   async function start(input) {
     if(input.confirm!==true)return {error:'Confirm a preview before routing a live alert.'};
@@ -328,5 +369,5 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
       }
     });}finally {running=false;}
   }
-  return {list,register,preview,start,configureAuto,recordAlert,enableEnrollment,step};
+  return {list,register,preview,start,previewNotice,sendNotice,configureAuto,recordAlert,enableEnrollment,step};
 }

@@ -169,7 +169,7 @@ export function createAlertApi({port,json,request = fetch}) {
   }
   const call=async (token,method,body)=>{
     const response=await providerJson(request,telegramUrl(token,method),body?telegramBody(body):{});
-    return {ok:response.ok&&response.data?.ok===true,result:response.data?.result};
+    return {ok:response.ok&&response.data?.ok===true,result:response.data?.result,http:response.http};
   };
   const telegram=createTelegramRouter({
     connect:async()=>{
@@ -200,6 +200,17 @@ export function createAlertApi({port,json,request = fetch}) {
     if (path==='/api/alerts/telegram-route-start') {
       const result=await telegram.start(input);
       return json(res,result.error?409:202,result);
+    }
+    if (path==='/api/alerts/telegram-notice-preview') {
+      const result=await telegram.previewNotice(input);
+      return json(res,result.error?409:200,result);
+    }
+    if (path==='/api/alerts/telegram-notice-send') {
+      const result=await telegram.sendNotice(input);
+      if(result.error)return json(res,409,result);
+      deliveries.unshift(result);
+      deliveries.length=Math.min(deliveries.length,50);
+      return json(res,200,{result});
     }
     if (path==='/api/alerts/telegram-automatic') {
       const result=await telegram.configureAuto(input);

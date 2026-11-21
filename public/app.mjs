@@ -345,13 +345,13 @@ function alertInbox() {
     return `<li class="alert-card ${level}"><div class="row"><span class="badge ${level}">${level} · ${severityNames[level]}</span><small class="mono">${incident.id} · ${incident.alert} ET</small></div>
       <h2>${html(incident.title)}</h2><p>${html(incident.service)} · ${incident.affectedPct}% affected in sample</p>
       <div class="references alert-sources" aria-label="Source alerts">${alerts.map(event=>ref(event.id)).join('')}</div>
-      <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button><button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button></div></div></li>`;
+      <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button><button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button></div></div></li>`;
   }).join('');
   const stats = [['all','All alerts'],...levels.map(level=>[level,level+' '+severityNames[level]])].map(([level,label])=>
     `<button class="small" aria-pressed="${alertFilter===level}" data-alert-filter="${level}">${label} (${level==='all' ? incidents.length : incidents.filter(item=>incidentPriority(item)===level).length})</button>`
   ).join('');
   return layout('Alert inbox.','Review alerts by urgency, open their evidence, and preview outgoing messages.',`
-    <div class="row"><div class="buttons" role="group" aria-label="Filter by urgency">${stats}</div><div class="buttons"><span class="badge neutral" data-auto-telegram-badge>Telegram auto: ${automaticTelegram?'on':'off'}</span><button class="small" data-telegram-routing>Telegram routing</button><button class="small" data-channels>Delivery setup</button></div></div>
+    <div class="row"><div class="buttons" role="group" aria-label="Filter by urgency">${stats}</div><div class="buttons"><span class="badge neutral" data-auto-telegram-badge>Telegram auto: ${automaticTelegram?'on':'off'}</span><button class="small" data-notify-telegram="">Send Telegram notification</button><button class="small" data-telegram-routing>Telegram routing</button><button class="small" data-channels>Delivery setup</button></div></div>
     <ul class="alert-list">${cards || '<li>No alerts at this urgency level.</li>'}</ul>`);
 }
 
@@ -643,6 +643,39 @@ async function reviewTelegramRoute(id) {
         <div class="buttons"><button class="small primary" type="submit">Preview Telegram route</button><button class="small" type="button" data-telegram-routing>Routing setup</button></div>
         <p data-delivery-status role="status"></p></form>`);
   }catch(error){if(anchor.isConnected)deliveryError(error);}
+}
+
+async function openTelegramNotice(incidentId='',recipient='') {
+  openDialog('Telegram delivery','Send Telegram notification','<p data-delivery-status role="status">Loading paired recipients…</p>');
+  const target=dialog.querySelector('[data-delivery-status]');
+  try {
+    const info=await deliveryApi('telegram-routing');
+    if(!target.isConnected||!dialog.open)return;
+    const recipients=info.team||info.people.length;
+    openDialog('Telegram delivery','Send Telegram notification',`
+      <p>Send a one-time message for a prepared incident. This does not open a new route or start an escalation timer.</p>
+      <form class="delivery-form" data-telegram-notice-form>
+        <label for="notice-incident">Prepared incident</label><select id="notice-incident" name="incident">
+          ${scenarios.map(incident=>`<option value="${incident.id}" ${incident.id===incidentId?'selected':''}>${incidentPriority(incident)} · ${html(incident.title)}</option>`).join('')}
+        </select>
+        <label for="notice-recipient">Send to</label><select id="notice-recipient" name="recipient" required>
+          <option value="" ${recipient?'':'selected'} disabled>Choose the team or a responder</option>
+          ${info.team?`<optgroup label="Team group"><option value="team" ${recipient==='team'?'selected':''}>Everyone in ${html(info.team.label)}</option></optgroup>`:''}
+          ${info.people.length?`<optgroup label="Private responders">${info.people.map(person=>`<option value="${html(person.id)}" ${recipient===person.id?'selected':''}>${html(person.label)} · ${html(person.destination)}</option>`).join('')}</optgroup>`:''}
+        </select>
+        <div class="buttons"><button class="small primary" type="submit" ${recipients?'':'disabled'}>Preview notification</button><button class="small" type="button" data-telegram-routing>Manage recipients</button></div>
+        <p data-delivery-status role="status">${recipients?'':'Pair a Telegram group or private responder first.'}</p>
+      </form>`);
+  }catch(error){if(target.isConnected)deliveryError(error);}
+}
+
+function showTelegramNotice(notice,recipient) {
+  openDialog(notice.incident,'Preview Telegram notification',`
+    <p><strong>To ${html(notice.label)}</strong> · ${notice.group?'One post in the group':'Private chat'}</p>
+    <section class="panel"><p class="chat-answer">${html(notice.text)}</p>${notice.group?'<small>The group post includes the responder enrollment button if a link has been created.</small>':''}</section>
+    <p data-delivery-status role="status"></p>
+    <div class="buttons"><button class="small" data-notify-telegram="${html(notice.incident)}" data-notice-recipient="${html(recipient)}">Back</button>
+    <button class="small primary" data-send-notice="${html(notice.token)}">Send notification</button></div>`);
 }
 
 function previewTelegramRoute(incident,preview) {
@@ -982,6 +1015,17 @@ document.addEventListener('click',event=>{
   }
   else if ('pairTeam' in data) pairRouteDestination('team');
   else if ('pairResponder' in data) pairRouteDestination('responder');
+  else if ('notifyTelegram' in data) void openTelegramNotice(data.notifyTelegram,data.noticeRecipient);
+  else if (data.sendNotice) {
+    button.disabled=true;
+    const target=dialog.querySelector('[data-delivery-status]');
+    target.textContent='Submitting the notification to Telegram…';
+    void deliveryApi('telegram-notice-send',{token:data.sendNotice,confirm:true}).then(({result})=>{
+      if(!target.isConnected||!dialog.open)return;
+      const outcome={accepted:'Telegram accepted the notification.',rejected:'Telegram rejected the notification.',unknown:'Telegram did not confirm delivery. Check the chat before sending again.'}[result.status];
+      openDialog(result.incident,'Telegram notification result',`<p>${html(outcome)}</p><p><strong>Recipient:</strong> ${html(result.label)}</p><button class="small" data-notify-telegram="${html(result.incident)}">Preview another notification</button>`);
+    },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
+  }
   else if (data.routeIncident) void reviewTelegramRoute(data.routeIncident);
   else if (data.routeStatus) void trackTelegramRoute(data.routeStatus);
   else if (data.startRoute) {
@@ -1051,6 +1095,19 @@ document.addEventListener('submit',event=>{
     void ask(document.querySelector('#question').value);
   }
   const form=event.target;
+  if(form.matches('[data-telegram-notice-form]')){
+    event.preventDefault();
+    const id=form.elements.incident.value;
+    const recipient=form.elements.recipient.value;
+    const button=form.querySelector('[type=submit]');
+    const target=form.querySelector('[data-delivery-status]');
+    button.disabled=true;
+    target.textContent='Preparing the Telegram notification…';
+    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(byId(id)),recipient}).then(result=>{
+      if(target.isConnected&&dialog.open)showTelegramNotice(result,recipient);
+    },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
+    return;
+  }
   if(form.matches('[data-auto-telegram]')){
     event.preventDefault();
     void updateTelegramMode({enabled:true,owner:form.elements.owner.value,wait:Number(form.elements.wait.value)},form.querySelector('[type=submit]'));
