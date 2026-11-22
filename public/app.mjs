@@ -3,7 +3,7 @@ import {
   asInvestigation, createSimulation, formatIncidentTime, investigationTemplates, releaseSimulation, simulationCategories,
   simulationSeverities, simulationStatuses, simulationTemplates, updateSimulation, validateReviewedResolution, validateSimulation,
 } from './simulations.mjs';
-import {demoReportEvents, durationLabel, exposureAssumptions, exposureAt, mergeIncidentWork, reportPeriod, reportSummary} from './reports.mjs';
+import {acceptedIncidentWork, demoReportEvents, durationLabel, exposureAssumptions, exposureAt, mergeIncidentWork, reportPeriod, reportSummary} from './reports.mjs';
 
 const main = document.querySelector('#main');
 const dialog = document.querySelector('#dialog');
@@ -115,15 +115,21 @@ let renderedPage;
 let workspaceEntrance;
 let revealObserver;
 let simulatorDraft = {};
-let notificationHistory = false;
+let notificationPanel = null;
 let automaticTelegram = false;
 let telegramOutboxBusy = false;
 let deliveryState;
 let deliveryPreview;
 const channelSetup = {
   sms:{name:'SMS',provider:'Twilio',setup:'https://console.twilio.com/',fields:[['TWILIO_ACCOUNT_SID','Account SID'],['TWILIO_AUTH_TOKEN','Auth token',true],['TWILIO_FROM','SMS-capable sender number']]},
-  email:{name:'Email',provider:'Resend',setup:'https://resend.com/api-keys',fields:[['RESEND_API_KEY','API key',true],['ALERT_EMAIL_FROM','Verified sender email']]},
+  email:{name:'Email'},
   telegram:{name:'Telegram',provider:'Telegram Bot API',setup:'https://t.me/BotFather',fields:[['TELEGRAM_BOT_TOKEN','BotFather token',true],['TELEGRAM_CHAT_ID','Chat ID or public channel username']]},
+};
+const emailSetup = {
+  gmail:{provider:'Gmail',setup:'https://myaccount.google.com/apppasswords',link:'Create Google app password',
+    fields:[['GMAIL_ADDRESS','Sending Gmail address'],['GMAIL_APP_PASSWORD','Google app password',true]]},
+  resend:{provider:'Resend',setup:'https://resend.com/api-keys',link:'Open Resend',
+    fields:[['RESEND_API_KEY','Resend API key',true],['ALERT_EMAIL_FROM','Verified sender address']]},
 };
 
 renderPersonaChoices();
@@ -955,7 +961,8 @@ function incidentWork(incident,state) {
   const task = state.tasks[id];
   const acknowledged = incident.activity?.find(item=>item.status==='Acknowledged' && item.time>=openedAt);
   const localAcceptance = task?.acceptedAt>=openedAt ? {acceptedAt:task.acceptedAt,acceptedBy:task.by}
-    : acknowledged ? {acceptedAt:acknowledged.time,acceptedBy:acknowledged.who} : {};
+    : acknowledged ? {acceptedAt:acknowledged.time,acceptedBy:acknowledged.who}
+    : task?.status==='claimed' && !task.acceptedAt ? {acceptedBy:task.by} : {};
   return {key:id+'/'+openedAt,incident:id,title,service,openedAt,company:incident.company,fingerprint:incident.fingerprint,
     level:incidentPriority(incident,state),...localAcceptance};
 }
@@ -1487,7 +1494,7 @@ function render() {
   unreadBadge.hidden = !unread;
   unreadBadge.textContent = unread>99 ? '99+' : unread;
   document.querySelector('#notifications').setAttribute('aria-label',unread ? `Notifications, ${unread} unread` : 'Notifications');
-  if (notificationHistory && dialog.open) refreshNotificationHistory();
+  if (notificationPanel && dialog.open) refreshNotificationHistory();
   const search = document.querySelector('#search');
   if (search) search.value = query;
   if (focusKeys.length) {
@@ -1564,7 +1571,7 @@ function choose(id) {
   cutoff = '23:59';
 }
 function openDialog(kicker,title,content) {
-  notificationHistory = false;
+  notificationPanel = null;
   dialog.innerHTML = `<div class="dialog-head"><div><div class="kicker">${html(kicker)}</div><h2 id="dialog-title">${html(title)}</h2></div><button data-close aria-label="Close dialog">✕</button></div><div class="dialog-body">${content}</div>`;
   if (!dialog.open) dialog.showModal();
   else dialog.querySelector('[data-close]').focus({preventScroll:true});
@@ -1625,18 +1632,64 @@ function draft() {
 
 function showNotifications() {
   openDialog('Incident desk','Notifications',`
-    <div class="notification-toolbar row">
-      <span class="quiet small" data-unread-summary></span><div class="buttons">
-      <button class="small" data-mark-all>Mark all as read</button>
-      <button class="small" data-toggle-sound aria-pressed="${sound}">Sound ${sound?'on':'off'}</button></div></div>
-    <ul class="notification-history" data-notification-history></ul>`);
-  notificationHistory = true;
+    <div class="tabs notification-tabs" role="group" aria-label="Notification views">
+      <button class="tab" data-notification-panel="history" aria-pressed="true" aria-controls="notification-history-panel">Activity</button>
+      <button class="tab" data-notification-panel="accepted" aria-pressed="false" aria-controls="notification-accepted-panel">Accepted</button>
+    </div>
+    <section id="notification-history-panel" aria-label="Notification activity">
+      <div class="notification-toolbar row">
+        <span class="quiet small" data-unread-summary></span><div class="buttons">
+        <button class="small" data-mark-all>Mark all as read</button>
+        <button class="small" data-toggle-sound aria-pressed="${sound}">Sound ${sound?'on':'off'}</button></div></div>
+      <ul class="notification-history" data-notification-history></ul>
+    </section>
+    <section id="notification-accepted-panel" aria-label="Accepted requests" hidden>
+      <ul class="notification-history" data-accepted-requests></ul>
+    </section>`);
+  notificationPanel = 'history';
   refreshNotificationHistory();
+}
+
+function refreshAcceptedRequests() {
+  const list = dialog.querySelector('[data-accepted-requests]');
+  const focused = document.activeElement;
+  const focusAttribute = focused?.hasAttribute('data-open-case') ? 'data-open-case' : 'data-resolve-incident';
+  const focusId = list.contains(focused) && focused.getAttribute(focusAttribute);
+  const requests = acceptedIncidentWork(localReportEvents(),workspace.telegramWork);
+  list.innerHTML = requests.flatMap(request=>{
+    const incident = byId(request.incident);
+    if (!incident || incident.triggeredAt===null || incident.groupedUnder) return [];
+    const id = html(request.incident);
+    const level = incidentPriority(incident);
+    const acceptedOn = request.acceptedAt ? ` · ${html(formatIncidentTime(request.acceptedAt))}` : '';
+    return `<li class="notification-record accepted-request">
+      <div class="row"><span class="badge ${level}">${levelName(level,Boolean(workspace.custom[request.incident]))}</span>
+        <span class="badge neutral">${request.closedAt ? 'Report needed' : 'In progress'}</span></div>
+      <strong>${html(incident.title)}</strong>
+      <small class="quiet">${id} · ${html(incident.service)}<br>Accepted by ${html(request.acceptedBy)}${acceptedOn}</small>
+      <div class="buttons"><button class="small" data-open-case="${id}">View incident</button>
+        <button class="small primary" data-resolve-incident="${id}">Write report</button></div>
+    </li>`;
+  }).join('') || '<li class="quiet">No accepted requests need a report. Incidents accepted here or in Telegram will appear here.</li>';
+  if (focusId) {
+    (list.querySelector(`[${focusAttribute}="${CSS.escape(focusId)}"]`) ||
+      dialog.querySelector('[data-notification-panel="accepted"]')).focus({preventScroll:true});
+  }
 }
 
 function refreshNotificationHistory() {
   const list = dialog.querySelector('[data-notification-history]');
   if (!list) return;
+  const accepted = notificationPanel==='accepted';
+  dialog.querySelector('#notification-history-panel').hidden = accepted;
+  dialog.querySelector('#notification-accepted-panel').hidden = !accepted;
+  for (const tab of dialog.querySelectorAll('[data-notification-panel]')) {
+    tab.setAttribute('aria-pressed',String(tab.dataset.notificationPanel===notificationPanel));
+  }
+  if (accepted) {
+    refreshAcceptedRequests();
+    return;
+  }
   const expanded = new Set([...list.querySelectorAll('details[open]')].map(detail=>detail.dataset.noticeKey));
   const focused = document.activeElement;
   const focusKey = focused?.dataset?.markNotice || focused?.closest('[data-notice-key]')?.dataset.noticeKey;
@@ -1695,10 +1748,11 @@ async function deliveryApi(action,payload,signal) {
 }
 
 function deliveryLog(entries) {
-  if (!entries?.length) return '<p class="quiet">No provider submissions in this server session.</p>';
-  const states={accepted:'Accepted by provider',rejected:'Rejected by provider',unknown:'Outcome unknown',duplicate:'Recently submitted'};
+  if (!entries?.length) return '<p class="quiet">No recent provider submissions.</p>';
+  const states={queued:'Queued',sending:'Sending',accepted:'Accepted by provider',rejected:'Rejected by provider',unknown:'Outcome unknown',duplicate:'Recently submitted'};
   return `<ul class="archive">${entries.map(entry=>`<li><div class="row"><strong>${html(channelSetup[entry.channel].name)} · ${html(entry.destination)}</strong><span class="badge neutral">${states[entry.status]}</span></div>
     <small>${html(entry.incident || '')} ${html(entry.level || '')}${entry.http ? ' · HTTP ' + entry.http : ''}</small>
+    ${entry.detail ? `<p class="small">${html(entry.detail)}</p>` : ''}
     ${entry.incident ? `<button class="small delivery-open" data-open-case="${html(entry.incident)}">Open incident</button>` : ''}</li>`).join('')}</ul>`;
 }
 
@@ -1717,12 +1771,16 @@ async function showChannels() {
     openDialog('Alert delivery','Delivery setup',`<p>Provider settings stay on this computer. Saving them makes no external request.</p>
       <div class="delivery-channels">${Object.entries(channelSetup).map(([key,channel])=>{
         const status=deliveryState.channels[key];
-        return `<section class="panel"><div class="row"><h3>${channel.name} · ${channel.provider}</h3>
+        return `<section class="panel"><div class="row"><h3>${channel.name} · ${html(status.provider)}</h3>
           <span class="badge neutral">${status.configured ? 'Configured' : 'Needs setup'}</span></div>
           <p><small>${status.recipients.length ? status.recipients.map(item=>html(item.destination)).join(' · ') : 'No destination configured'}</small></p>
           <div class="buttons"><button class="small" data-provider="${key}">${status.configured ? 'Update' : 'Configure'} ${channel.name}</button>
-            ${status.configured ? `<button class="small" data-check-provider="${key}">Check connection</button>` : `<a class="small" target="_blank" rel="noreferrer" href="${channel.setup}">Open ${key==='telegram'?'BotFather':channel.provider}</a>`}
+            ${status.configured ? `<button class="small" data-check-provider="${key}">Check connection</button>` : channel.setup ? `<a class="small" target="_blank" rel="noreferrer" href="${channel.setup}">Open ${key==='telegram'?'BotFather':channel.provider}</a>` : ''}
             ${key==='telegram'?'<button class="small" data-telegram-routing>Team routing</button>':''}</div>
+          ${key==='email'?`<div class="row block"><strong>Automatic email</strong><span class="badge neutral">${deliveryState.emailAutomatic?'On':'Off'}</span></div>
+          <p class="small">Every new incident and confirmed Telegram alert gets an informational email copy. Respond in Telegram.</p>
+          <div class="buttons"><button class="small" data-email-test="review" ${status.configured&&status.recipients.length?'':'disabled'}>Send test email</button>
+            <button class="small" data-email-automatic="${deliveryState.emailAutomatic?'off':'on'}" ${deliveryState.emailAutomatic||status.configured&&status.recipients.length?'':'disabled'}>${deliveryState.emailAutomatic?'Disable':'Enable'} automatic email</button></div>`:''}
           <p class="small quiet" id="check-${key}" role="status"></p></section>`;
       }).join('')}</div><h3 class="block">Recent provider submissions</h3>${deliveryLog(deliveryState.deliveries)}`);
   } catch(error) { if (target.isConnected) deliveryError(error); }
@@ -1970,6 +2028,7 @@ async function openTelegramNotice(incidentId='',recipient='') {
 function showTelegramNotice(notice,recipient) {
   openDialog(notice.incident,'Preview Telegram notification',`
     <p><strong>To ${html(notice.label)}</strong> · ${notice.group?'One post in the group':'Private chat'}</p>
+    ${emailCopySummary(notice.emailRecipients)}
     ${notice.test?`<p>${testBadge} · This message includes the test description and any recommended actions.</p>`:''}
     ${notice.wait?`<p>The responder has <strong>${notice.wait} seconds</strong> to reply. A decline or timeout escalates to <strong>${html(notice.team)}</strong>.</p>`:''}
     <section class="panel"><p class="chat-answer">${html(notice.text)}</p>${notice.group?'<small>The group post includes the responder enrollment button if a link has been created.</small>':''}</section>
@@ -1978,10 +2037,15 @@ function showTelegramNotice(notice,recipient) {
     <button class="small primary" data-send-notice="${html(notice.token)}">${notice.wait?'Send and start timer':'Send notification'}</button></div>`);
 }
 
+function emailCopySummary(recipients) {
+  return recipients?.length ? `<p class="small"><strong>Email copy</strong> · ${recipients.map(html).join(' · ')}. Responses stay in Telegram.</p>` : '';
+}
+
 function previewTelegramRoute(incident,preview) {
   openDialog(incident,'Preview Telegram route',`
     ${preview.messages.map(message=>`<section class="panel block"><h3>${html(message.destination)}</h3><p class="chat-answer">${html(message.body)}</p></section>`).join('')}
     ${preview.canStart?`<p>${preview.direct?`Send to <strong>${html(preview.team)}</strong> now.`:`Page <strong>${html(preview.owner)}</strong> now. Send to <strong>${html(preview.team)}</strong> if the responder declines or misses the deadline.`}</p>`:`<p><strong>${html(preview.missing)}</strong></p>`}
+    ${emailCopySummary(preview.emailRecipients)}
     <div class="buttons"><button class="small" data-route-incident="${html(incident)}">Back</button>
     ${preview.canStart?`<button class="small primary" data-start-route="${html(preview.token)}">Confirm and start live routing</button>`:'<button class="small" data-telegram-routing>Routing setup</button>'}</div><p data-delivery-status role="status"></p>`);
 }
@@ -2007,25 +2071,67 @@ async function trackTelegramRoute(id,initial) {
   }catch(error){if(slot.isConnected)slot.textContent=error.message;}
 }
 
-function providerForm(key) {
-  const channel=channelSetup[key];
+function providerForm(key,provider = deliveryState?.channels.email.providerKey || 'gmail') {
+  const isEmail=key==='email';
+  const channel=isEmail ? {...channelSetup.email,...emailSetup[provider]} : channelSetup[key];
   if (!channel) return;
-  const saved=deliveryState?.channels[key].savedFields || [];
+  const selected=deliveryState?.channels[key];
+  const saved=(!isEmail || selected?.providerKey===provider) && selected?.savedFields || [];
   const guidance={
     sms:'Use a Twilio account and an SMS-capable sender that can send custom texts to Canadian numbers. Enter the sender in international format, including the +.',
-    email:'Verify a domain you control in Resend, then create a sending-access API key for that domain and enter a sender address on it.',
+    email:provider==='gmail' ? 'Use a personal Gmail account with 2-Step Verification. Create an app password for Aurelis and paste it below.'
+      : 'Verify a domain you control in Resend, then create a sending-access API key and enter a sender address on that domain.',
     telegram:'Paste your BotFather token and select Pair and save my chat. Aurelis will save and verify the connection after you tap Start in your private chat with the bot.',
   };
   openDialog(channel.provider,'Configure ' + channel.name,`<p>${guidance[key]}</p>
-    <p><a target="_blank" rel="noreferrer" href="${channel.setup}">Open ${key==='telegram'?'BotFather':channel.provider}</a>
-    ${key==='email'?' · <a target="_blank" rel="noreferrer" href="https://resend.com/domains">Verified domains</a>':''}</p>
-    <form class="delivery-form" data-provider-form="${key}" autocomplete="off">
+    ${isEmail?`<div class="tabs notification-tabs" role="group" aria-label="Email provider">${Object.entries(emailSetup).map(([id,item])=>
+      `<button class="tab" data-email-provider="${id}" aria-pressed="${id===provider}">${item.provider}</button>`).join('')}</div>`:''}
+    <p><a target="_blank" rel="noreferrer" href="${channel.setup}">${channel.link || `Open ${key==='telegram'?'BotFather':channel.provider}`}</a>
+    ${isEmail&&provider==='resend'?' · <a target="_blank" rel="noreferrer" href="https://resend.com/domains">Verified domains</a>':''}</p>
+    <form class="delivery-form" data-provider-form="${key}" ${isEmail?`data-email-service="${provider}"`:''} autocomplete="off">
       ${channel.fields.map(([id,label,masked])=>`<label for="${id}">${label}${saved.includes(id) ? ' · Saved; leave blank to keep' : ''}</label>
       <input id="${id}" name="${id}" type="${masked?'password':'text'}" maxlength="180" autocomplete="off" ${saved.includes(id) ? '' : 'required'}>`).join('')}
+      ${isEmail?`<label for="email-recipients">Alert recipients · one address per line</label>
+      <textarea id="email-recipients" name="recipients" rows="3" maxlength="1500" placeholder="${selected?.recipients.length?'Leave blank to keep saved recipients':'oncall@example.com'}"></textarea>
+      ${selected?.recipients.length?`<p class="small quiet">Saved recipients: ${selected.recipients.map(recipient=>html(recipient.destination)).join(' · ')}.</p>`:''}
+      <p class="small quiet">After changing the sender or recipients, send a test and enable automatic email when ready.</p>`:''}
       ${key==='telegram'?'<div class="buttons"><button class="small primary" type="button" data-pair-personal>Pair and save my chat</button><button class="small" type="button" data-find-chat>Find chat ID manually</button></div><div id="telegram-pairing"></div>':''}
       <p data-delivery-status role="status"></p>
       <div class="buttons"><button class="small primary" type="submit">Save settings</button><button class="small" type="button" data-channels>Back</button></div>
     </form>`);
+}
+
+async function setEmailAutomation(button) {
+  const output=dialog.querySelector('#check-email');
+  button.disabled=true;
+  try {
+    await deliveryApi('email-automatic',{enabled:button.dataset.emailAutomatic==='on'});
+    if (button.isConnected) void showChannels();
+  } catch (error) {
+    if (button.isConnected) { output.textContent=error.message; button.disabled=false; }
+  }
+}
+
+function reviewEmailTest() {
+  const recipients=deliveryState.channels.email.recipients;
+  openDialog('Email alerts','Send test email',`<p>Send the <strong>Aurelis demo test alert</strong> to:</p>
+    <ul class="archive">${recipients.map(item=>`<li>${html(item.destination)}</li>`).join('')}</ul>
+    <p data-delivery-status role="status"></p><div class="buttons">
+    <button class="small primary" data-email-test="confirm">Confirm test email</button><button class="small" data-channels>Back</button></div>`);
+}
+
+async function sendEmailTest(button) {
+  const target=dialog.querySelector('[data-delivery-status]');
+  button.disabled=true;
+  target.textContent='Submitting the test to your email provider…';
+  try {
+    const {results}=await deliveryApi('email-test',{confirm:true});
+    if (target.isConnected) openDialog('Email alerts','Test email results',`
+      <p>Check your recipients’ inboxes, including junk or quarantine, before enabling automatic email.</p>
+      ${deliveryLog(results)}<button class="small" data-channels>Back to delivery setup</button>`);
+  } catch (error) {
+    if (target.isConnected) { deliveryError(error); button.disabled=false; }
+  }
 }
 
 async function checkProvider(key) {
@@ -2425,6 +2531,10 @@ document.addEventListener('click',event=>{
   else if ('live' in data) { cutoff='23:59'; render(); }
   else if ('handoff' in data) draft();
   else if ('notifications' in data) showNotifications();
+  else if (data.notificationPanel) {
+    notificationPanel = data.notificationPanel;
+    refreshNotificationHistory();
+  }
   else if (data.alertFilter) { alertFilter=data.alertFilter; render(); }
   else if (data.radarIncident) openCase(data.radarIncident);
   else if (data.radarFilter) {
@@ -2472,6 +2582,10 @@ document.addEventListener('click',event=>{
     },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
   }
   else if (data.checkProvider) void checkProvider(data.checkProvider);
+  else if (data.emailProvider) providerForm('email',data.emailProvider);
+  else if (data.emailAutomatic) void setEmailAutomation(button);
+  else if (data.emailTest==='review') reviewEmailTest();
+  else if (data.emailTest==='confirm') void sendEmailTest(button);
   else if ('pairPersonal' in data) void discoverTelegram(undefined,true);
   else if ('findChat' in data) void discoverTelegram();
   else if (data.checkChat) void discoverTelegram(data.checkChat);
@@ -2657,7 +2771,9 @@ document.addEventListener('submit',event=>{
   const isSettings=Boolean(form.dataset.providerForm);
   const payload=isSettings ? {
     channel:form.dataset.providerForm,
-    fields:Object.fromEntries([...values.entries()].map(([name,value])=>[name,value.trim()]).filter(([,value])=>value)),
+    fields:Object.fromEntries([...values.entries()].map(([name,value])=>[name,value.trim()]).filter(([name,value])=>name!=='recipients' && value)),
+    ...(form.dataset.emailService ? {provider:form.dataset.emailService,
+      recipients:values.get('recipients').split(/[\n,;]+/).map(value=>value.trim()).filter(Boolean)} : {}),
   } : {incident:incident.id,level:incidentPriority(incident),targets:values.getAll('target')};
   void deliveryApi(isSettings?'settings':'preview',payload).then(result=>{
     if (!dialog.open || !target.isConnected) return;

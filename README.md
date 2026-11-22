@@ -46,6 +46,12 @@ When an alert fires, the Desk shows the evidence-linked brief immediately and re
 
 The microphone uses browser dictation where available, subject to the browser's microphone permission and speech service. The assistant also accepts typed questions and can read a response aloud.
 
+## Enable email alerts
+
+Run `npm ci` to install Gmail SMTP support, then start the local server. Open **Alerts → Delivery setup → Configure Email** and choose **Gmail**. Use a personal Gmail sender with 2-Step Verification and generate a [Google app password](https://myaccount.google.com/apppasswords) for Aurelis. Enter the sending address and app password in the local form. Add or replace recipients with one address per line. Credentials and recipient addresses are saved in ignored local settings files.
+
+Use **Check connection** to verify the sign-in and **Send test email** to send one demo message per saved recipient. Confirm inbox delivery, then select **Enable automatic email**. It sends an informational copy of each new incident or confirmed Telegram alert. Each recipient gets one copy per alert or route, including when a private page escalates. Accept, decline, and mark incidents fixed in Telegram. Changing email credentials or recipients turns automatic email off until enabled again. Resend remains available if you already have a verified sending domain.
+
 ## Demo path
 
 1. **After a release** shows the checkout failure and the recent Payments API release. Open **Investigation log** for the actual record lookups and **Time Machine** to move between the alert at 10:02 and the provider bulletin at 10:07. The bulletin's availability time differs from the provider's estimated outage start.
