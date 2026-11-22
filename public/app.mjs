@@ -1,8 +1,9 @@
-import {documents, history, investigate, priority, scenarios, services, teammates, upcoming} from './data.mjs';
+import {companyKey, companyLabel, documents, groupDuplicate, history, investigate, priority, runbookFreshness, sampleCompanies, sampleCompanyFor, sampleMonitoringDate, sampleMonitoringTime, scenarios, services, teammates, upcoming} from './data.mjs';
 import {
-  asInvestigation, createSimulation, formatIncidentTime, releaseSimulation, simulationCategories,
-  simulationSeverities, simulationStatuses, simulationTemplates, updateSimulation, validateSimulation,
+  asInvestigation, createSimulation, formatIncidentTime, investigationTemplates, releaseSimulation, simulationCategories,
+  simulationSeverities, simulationStatuses, simulationTemplates, updateSimulation, validateReviewedResolution, validateSimulation,
 } from './simulations.mjs';
+import {demoReportEvents, durationLabel, exposureAssumptions, exposureAt, mergeIncidentWork, reportPeriod, reportSummary} from './reports.mjs';
 
 const main = document.querySelector('#main');
 const dialog = document.querySelector('#dialog');
@@ -17,16 +18,32 @@ const entranceTimings = {
   startup:{duration:2000,motion:1100,lead:160},
   menu:{duration:1200,motion:640,lead:70},
 };
-const tabs = [['brief','Brief'],['details','Case details'],['runbook','Runbooks'],['trace','Investigation log'],['replay','Time Machine'],['compare','Compare']];
-const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','chat'];
-const byId = (id,state = workspace) => state.custom[id]
-  ? asInvestigation(state.custom[id]) : scenarios.find(incident => incident.id === id);
+const tabs = [['brief','Brief'],['details','Case details'],['runbook','Runbooks'],['trace','Investigation log'],['replay','Time Machine'],['compare','Compare'],['family','Family tree']];
+const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','reports','chat'];
+function byId(id,state = workspace) {
+  const record = state.custom[id];
+  if (!record) {
+    const incident=scenarios.find(item=>item.id===id);
+    return incident && {...incident,company:sampleCompanyFor(incident.service)};
+  }
+  const grouped = Object.values(state.custom).filter(item=>item.groupedUnder===id)
+    .map(item=>{
+      const alert = asInvestigation(item).events.at(-1);
+      return {...alert,seenAt:Math.max(alert.seenAt,record.occurredAt)};
+    });
+  return asInvestigation(record,grouped);
+}
+const reviewedArchive = (state = workspace) => Object.values(state.resolutions).filter(record=>
+  !state.custom[record.id] || state.custom[record.id].status==='resolved');
+const investigateCase = (incident,snapshot = cutoff,state = workspace) =>
+  investigate(incident,snapshot,reviewedArchive(state));
 const html = value => String(value ?? '').replace(/[&<>"']/g, char =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const badge = level => `<span class="badge ${level}">${level}</span>`;
 const ref = id => `<button type="button" class="ref" data-source="${html(id)}">${html(id)}</button>`;
 const documentLink = document => `<button type="button" class="small doc-link" data-source="${html(document.id)}">${html(document.id)} · ${html(document.title)}</button>`;
 const cad = dollars => new Intl.NumberFormat('en-CA', {style:'currency',currency:'CAD',maximumFractionDigits:0}).format(dollars);
+const cadUnit = new Intl.NumberFormat('en-CA',{style:'currency',currency:'CAD',minimumFractionDigits:0,maximumFractionDigits:2});
 const levels = ['P1','P2','P3'];
 const radarLevels = ['P1','P2','P3','P4'];
 const radarSpots = [[38,47],[62,53],[43,19],[60,81],[15,52],[85,47],[66,19],[35,82],[16,19],[86,20],[13,81],[85,81]];
@@ -38,7 +55,10 @@ const testBadge = '<span class="badge test-badge">Test event</span>';
 const openIncidents = () => workspace.active.map(id=>byId(id)).filter(Boolean);
 
 function initial() {
-  return {active:scenarios.slice(0,3).map(incident => incident.id), tasks:{}, messages:[], priorities:{}, notifications:[], notes:{}, custom:{}};
+  const active = scenarios.slice(0,3).map(incident=>incident.id);
+  const analyses = Object.fromEntries(active.map(id=>[id,{status:'queued'}]));
+  return {active,tasks:{},messages:[],priorities:{},priorityHistory:{},notifications:[],notes:{},custom:{},analyses,resolutions:{},
+    arrivals:{},workHistory:{},telegramWork:[],reportOutbox:{},exposure:{}};
 }
 function read() {
   try {
@@ -57,9 +77,22 @@ let personaChoice = actor;
 let telegramResponders = new Map();
 let selected = 'INC-121';
 let activeTab = 'brief';
+let familyView = 'map';
+let reportRange = 'week';
+let reportOffset = 0;
+let reportCompany = null;
+let includeSampleReports = true;
+let reportSyncAt = 0;
+let reportSyncBusy = false;
+const reportInsights = new Map();
+let reportInsightTimer;
+const exposureWindows = new Map();
 let cutoff = '23:59';
 let query = '';
 let connected = false;
+let checkingGemini = location.protocol.startsWith('http');
+let analysisBusy = false;
+let analysisCooldown = 0;
 const toastQueue = [];
 const openToasts = new Map();
 const toastShelf = document.querySelector('#toast-stack');
@@ -304,13 +337,13 @@ function pageOnCall(state,incident) {
 function tick() {
   const latest = workspace;
   const now = Date.now();
-  const due = Object.entries(latest.tasks).filter(([, task]) => task.status === 'pending' && task.until <= now);
+  const due = latest.active.filter(id => latest.tasks[id]?.status === 'pending' && latest.tasks[id].until <= now);
   const scheduled = Object.values(latest.custom).some(incident=>incident.triggeredAt===null && incident.scheduledAt<=now);
   if ((due.length || scheduled) && !escalatorBusy) {
     escalatorBusy = true;
     update(state => {
-      const expired = due.filter(([id]) => state.tasks[id]?.status === 'pending' && state.tasks[id].until <= Date.now());
-      for (const [id] of expired) {
+      const expired = due.filter(id => state.active.includes(id) && state.tasks[id]?.status === 'pending' && state.tasks[id].until <= Date.now());
+      for (const id of expired) {
         const incident = byId(id,state);
         if (incident) escalate(state, incident, 'Acknowledgement timed out.');
       }
@@ -324,6 +357,59 @@ function tick() {
   if (telegramTimer) telegramTimer.textContent = remainingSeconds(Number(telegramTimer.dataset.telegramDeadline))+'s';
   const pending = Object.values(latest.custom).find(incident=>incident.telegram?.status==='pending' && incident.telegram.nextAt<=now);
   if (pending && !telegramOutboxBusy) void deliverSimulation(pending);
+  void runNextAnalysis();
+  if (now>=reportSyncAt) void syncReportEvents();
+}
+
+function aiIncidentPayload(incident,state = workspace) {
+  const {id,title,description,service,company,occurredAt,triggeredAt,level,serviceVersion} = incident;
+  const archive = reviewedArchive(state).filter(record=>record.service===service && companyKey(record.company)===companyKey(company))
+    .sort((a,b)=>Number(b.fingerprint===incident.fingerprint)-Number(a.fingerprint===incident.fingerprint) ||
+      b.resolvedAt-a.resolvedAt).slice(0,3);
+  const grouped = incident.sampleAlert ? incident.events
+    .filter(event=>event.kind==='Alert' && event.id!==id+'-alert').slice(0,3)
+    .map(event=>({...event,detail:event.detail.slice(0,400)})) : [];
+  return incident.sampleAlert ? {id,archive,report:{title,description,service,company,occurredAt,triggeredAt,level,serviceVersion,grouped}}
+    : {id,archive};
+}
+
+async function runNextAnalysis() {
+  if (!connected || analysisBusy || Date.now()<analysisCooldown) return;
+  const requested = byId(selected);
+  const foreground = view()==='desk' && activeTab==='brief' && cutoff==='23:59' && requested && requested.triggeredAt!==null;
+  const id = foreground && (!workspace.analyses[selected] || workspace.analyses[selected].status==='queued')
+    ? selected : Object.keys(workspace.analyses).find(key=>workspace.analyses[key].status==='queued');
+  if (!id) return;
+  analysisBusy = true;
+  const analyze = async ()=>{
+    const state = read();
+    const incident = byId(id,state);
+    const existing = state.analyses[id];
+    if (!incident || incident.triggeredAt===null || (existing && existing.status!=='queued')) return;
+    let analysis;
+    try {
+      const response = await fetch('/api/analysis',{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(aiIncidentPayload(incident,state)),
+        signal:AbortSignal.timeout(14_000),
+      });
+      if (response.status===429) analysisCooldown = Date.now()+60_000;
+      if (!response.ok) throw Error();
+      analysis = {status:'ready',...await response.json()};
+    } catch {
+      analysis = {status:'unavailable'};
+    }
+    await update(current=>{
+      if (byId(id,current) && current.analyses[id]?.status!=='ready' &&
+          current.analyses[id]?.revision===existing?.revision) current.analyses[id] = analysis;
+    });
+  };
+  try {
+    if (navigator.locks) {
+      await navigator.locks.request(saveKey+'/analysis',{ifAvailable:true},lock=>lock ? analyze() : undefined);
+    } else await analyze();
+  } finally {
+    analysisBusy = false;
+  }
 }
 
 function actionOnTask(action, id) {
@@ -347,8 +433,9 @@ function actionOnTask(action, id) {
     }
     const canAccept = action === 'accept' && task?.status === 'pending' && performer === incident.owner;
     const canClaim = action === 'claim' && task?.status === 'open';
-    if (canAccept || canClaim) {
-      state.tasks[id] = {status:'claimed', by:performer};
+    const canPickUp = action==='accept' && !task && incidentPriority(incident,state)!=='P1';
+    if (canAccept || canClaim || canPickUp) {
+      state.tasks[id] = {status:'claimed',by:performer,acceptedAt:Date.now()};
       notification(state,id,'Ownership confirmed',`${performer} accepted the task.`);
       if (canClaim) state.messages.push({id, type:'claim', by:performer, time:Date.now()});
       return `${performer} accepted ownership of ${id}.`;
@@ -358,8 +445,9 @@ function actionOnTask(action, id) {
 
 function taskBar(incident) {
   const task = workspace.tasks[incident.id];
-  if (!task && incidentPriority(incident) !== 'P1') return '';
+  if (!workspace.active.includes(incident.id)) return '';
   const taskButton = (action, label, style = '') => `<button class="small ${style}" data-task="${action}" data-id="${incident.id}">${html(label)}</button>`;
+  if (!task && incidentPriority(incident)!=='P1') return `<div class="handoff"><span>Response timer starts on acceptance.</span>${taskButton('accept','Accept task')}</div>`;
   if (!task) return `<div class="handoff"><span><strong>Urgent response</strong> · ${incident.owner} on call</span>${taskButton('page','Page on-call','primary')}</div>`;
   if (task.status === 'claimed') return `<div class="handoff"><strong>Accepted by ${html(task.by)}</strong><span class="small quiet">Owner confirmed</span></div>`;
   if (task.status === 'open') return `<div class="handoff"><strong>Escalated to #general</strong><div class="buttons"><button class="small" data-nav="chat">Open team chat</button>${taskButton('claim','Claim as ' + actor,'primary')}</div></div>`;
@@ -368,37 +456,127 @@ function taskBar(incident) {
     ${taskButton('expire','Simulate timeout')}</div></div>`;
 }
 
+function automaticAnalysis(incident) {
+  if (cutoff!=='23:59') return '';
+  const analysis = workspace.analyses[incident.id];
+  let content;
+  if (analysis?.status==='ready') {
+    content = `<p class="chat-answer">${html(analysis.summary)}</p>
+      <dl class="analysis-checks"><div><dt>First check</dt><dd>${html(analysis.nextCheck)}</dd></div>
+        <div><dt>Key uncertainty</dt><dd>${html(analysis.uncertainty)}</dd></div></dl>
+      <div class="references" aria-label="Sources cited by Gemini">${analysis.sources.map(ref).join('')}</div>`;
+  } else if (checkingGemini) {
+    content = '<p class="quiet" role="status">Checking Gemini availability…</p>';
+  } else if (!connected) {
+    content = '<p class="quiet">Gemini is unavailable. The evidence-linked brief is ready.</p>';
+  } else if (analysis?.status==='unavailable') {
+    content = `<p class="quiet" role="status">Gemini couldn’t complete the analysis. The evidence-linked brief is ready.</p>
+      <button class="small" data-retry-analysis="${html(incident.id)}">Retry AI analysis</button>`;
+  } else {
+    content = '<p class="quiet" role="status">Gemini is reviewing the incident and its source records…</p>';
+  }
+  return `<section class="panel block ai-analysis" aria-labelledby="analysis-title">
+    <div class="row"><h3 id="analysis-title">AI analysis</h3><span class="badge neutral">Gemini</span></div>
+    ${content}</section>`;
+}
+
+function freshnessPanel(document, currentVersion, archive = cutoff==='23:59' ? reviewedArchive() : []) {
+  const {check,reasons} = runbookFreshness(document,archive,currentVersion);
+  return `<div class="runbook-check block">
+    <span class="badge neutral">${reasons.length?'Review before use':'Verification recorded'}</span>
+    <p class="small">${check ? `Last verified ${html(formatIncidentTime(check.verifiedAt))} by ${html(check.reviewer)} · Version ${html(check.version || 'unknown')}.` : 'No verification is recorded for this procedure.'}</p>
+    ${reasons.length ? `<ul class="small">${reasons.map(reason=>`<li>${html(reason)}</li>`).join('')}</ul>` : ''}</div>`;
+}
+
+function priorityExplanation(incident) {
+  const current = incidentPriority(incident);
+  const changes = workspace.priorityHistory[incident.id] || [];
+  const rationale = incident.sampleAlert ? 'Severity came from the submitted alert. The report has no measured affected share.'
+    : `Suggested ${priority(incident)} · ${incident.affectedPct}% affected in the sample · ${incident.core?'Customer-facing service':'Internal or indirect customer impact'}.`;
+  return `<details class="block"><summary>Why ${current}?</summary><p>${rationale}</p>
+    ${changes.length ? `<ol class="archive">${changes.map(change=>`<li><strong>${change.previous} → ${change.level}</strong> · ${html(change.reason)}
+      <br><small>${html(change.who)} · ${html(formatIncidentTime(change.time))}</small></li>`).join('')}</ol>` : '<small>No severity changes recorded.</small>'}</details>`;
+}
+
+function incidentExposure(incident) {
+  const group=services.find(item=>item.name===incident.service)?.group;
+  return exposureAssumptions(incident,group,workspace.exposure[incident.id]);
+}
+
+function exposureLabel(assumptions,minutes) {
+  const risk=exposureAt(assumptions,minutes);
+  return `${cad(risk.low)}–${cad(risk.high)} CAD`;
+}
+
+function exposurePanel(incident,result) {
+  const assumptions=incidentExposure(incident);
+  const elapsed=Math.max(0,toMinute(result.evidence.at(-1)?.seen || incident.alert)-toMinute(incident.alert));
+  const minutes=exposureWindows.get(incident.id) ?? Math.max(15,Math.min(120,elapsed));
+  return `<section class="panel block risk-panel" aria-labelledby="risk-title">
+    <div class="row"><div><h3 id="risk-title">Potential financial exposure</h3><small>${workspace.exposure[incident.id]?'Your assumptions':'Sample assumptions'} · Estimated, CAD</small></div>
+      <button type="button" class="small" data-edit-exposure>Change assumptions</button></div>
+    <div class="risk-amount" id="cost-projection" aria-live="polite">${exposureLabel(assumptions,minutes)}</div>
+    <label for="cost-window">If impact continues for <output id="cost-minutes">${minutes} minutes</output></label>
+    <input type="range" class="range" id="cost-window" min="0" max="120" value="${minutes}">
+    <div class="risk-ticks" aria-hidden="true"><span>0</span><span>30m</span><span>1h</span><span>90m</span><span>2h</span></div>
+    <p class="quiet small">${assumptions.low}–${assumptions.high} affected operations per minute × ${cadUnit.format(assumptions.order)} per operation. Measures value exposed over time. Actual loss depends on recovery and retries.</p>
+  </section>`;
+}
+
+function editExposure() {
+  const incident=byId(selected);
+  const assumptions=incidentExposure(incident);
+  openDialog(incident.id,'Financial exposure assumptions',`
+    <form class="simulation-form" data-exposure-form="${html(incident.id)}">
+      <label>Lower affected operations per minute<input name="low" type="number" min="0" max="100000000" step="any" required value="${assumptions.low}"></label>
+      <label>Upper affected operations per minute<input name="high" type="number" min="0" max="100000000" step="any" required value="${assumptions.high}"></label>
+      <label>Value per affected operation (CAD)<input name="order" type="number" min="0" max="100000000" step="any" required value="${assumptions.order}"></label>
+      <div class="buttons wide"><button type="button" class="small" data-reset-exposure="${html(incident.id)}">Use sample assumptions</button>
+        <button class="primary small" type="submit">Save assumptions</button></div>
+    </form>`);
+}
+
 function brief(incident, result) {
   if (!result.observed) return '<div class="lead"><strong>The alert hasn’t fired yet.</strong><p>Move the Time Machine forward to see the brief as it became available.</p></div>';
   const historical = result.nearby[0];
-  const money = incident.money;
-  const snapshotTime = cutoff === '23:59' ? result.evidence.at(-1)?.seen || incident.alert : cutoff;
-  const minutes = Math.max(0,toMinute(snapshotTime)-toMinute(incident.alert));
-  const estimate = money && `${cad(money.low * money.order * minutes)}–${cad(money.high * money.order * minutes)} CAD`;
-  return `<div class="lead"><div class="kicker">${result.exact.length && result.known ? 'Strong historical match' : incident.variant === 'Unknown issue' ? 'Needs investigation' : 'Working hypothesis'}</div>
-    <h3>${html(result.cause)}</h3><div class="references">${incident.causeSources.map(ref).join('')}</div></div>
-    ${result.alternative ? `<div class="panel dissent"><div class="kicker">Dissenting Detective</div><p>${html(incident.alternative)}</p>${ref(result.alternative.id)}
-    <details class="block"><summary>What would change the lead?</summary><p>If the old version times out at the same rate during the same provider window, the release becomes a weaker explanation.</p></details></div>` : ''}
+  const saved = cutoff==='23:59' ? workspace.resolutions[incident.id] : null;
+  const work = cutoff==='23:59' ? workspace.workHistory[incidentWork(incident,workspace).key] : null;
+  return `<div class="lead"><div class="kicker">${result.certainty} cause</div>
+    <h3>${html(result.cause)}</h3>
+    <p><strong>First check</strong> · ${html(result.next)}</p>
+    ${result.causeSources.length ? `<div class="references"><span class="small">Supporting evidence</span>${result.causeSources.map(ref).join('')}</div>` : ''}
+    ${incident.sampleAlert ? `<small>Error signature · ${html(incident.fingerprint || 'No single code detected')}</small>` : ''}</div>
+    ${saved && !workspace.active.includes(incident.id) ? `<section class="panel block"><h3>Reviewed resolution</h3>
+      <p>${html(saved.fix)}</p><p><strong>Verified by ${html(saved.responder)}</strong> · ${html(saved.verification)}</p>${ref(saved.id)}</section>` : ''}
+    ${work?.via==='telegram' && !work.verified ? `<section class="panel block"><h3>Fixed in Telegram</h3>
+      <p>${html(work.closedBy)} · ${html(formatIncidentTime(work.closedAt))} · ${durationLabel(work.closedAt-work.openedAt)} from alert</p>
+      <button class="small" data-resolve-incident="${html(incident.id)}">Write resolution report</button></section>` : ''}
+    ${automaticAnalysis(incident)}
+    ${exposurePanel(incident,result)}
+    <section class="panel dissent"><div class="kicker">Dissenting Detective</div><details><summary>What would change the diagnosis?</summary>
+      <p>${html(result.challenger.claim)}</p><p><strong>How to test it</strong> · ${html(result.challenger.check)}</p>
+      <div class="references">${result.challenger.sources.map(ref).join('')}</div></details></section>
     <div class="duo block">
       <div class="panel"><div class="kicker">Known fix</div><h3>${result.known ? html(result.known.fix) : 'No known fix for this alert'}</h3>
-      <p class="quiet">${result.known ? `Documented by ${html(result.known.responder)} in ${html(result.known.id)}.` : result.exact.length ? `The matching record lists ${html(result.exact[0].responder)} and omits the resolution steps.` : 'The history has no matching error signature with a verified fix.'}</p>
+      <p class="quiet">${result.known ? `Documented by ${html(result.known.responder)} in ${html(result.known.id)}.` : 'The archive has no verified fix applicable to this alert and version.'}</p>
       ${historical ? ref(result.known?.id || historical.id) : ''}
-      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}</div>` : ''}</div>
-      <div class="panel"><div class="kicker">First check</div><h3>${html(incident.next)}</h3><small>The on-call engineer reviews the evidence and decides.</small></div>
+      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}${freshnessPanel(result.verifiedDocument,incident.serviceVersion)}</div>` : ''}</div>
+      <div class="panel"><div class="kicker">Key uncertainty</div><h3>${html(incident.unknowns[0])}</h3><button class="small" data-tab="family">Open incident family tree</button></div>
     </div>
-    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}</div>` : ''}
+    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}${freshnessPanel(result.guide,incident.serviceVersion)}</div>` : ''}
     <div class="duo block">
       <div class="panel"><div class="kicker">Recent changes</div><ul class="archive">${result.changes.map(change => `<li><strong>${html(change.title)}</strong><br><small>${change.time} ET</small> ${ref(change.id)}</li>`).join('') || '<li>No relevant change recorded in this snapshot.</li>'}</ul></div>
-      <div class="panel"><div class="kicker">Impact and priority</div><h3>${incidentPriority(incident)} · ${incident.affectedPct}% of monitored operations affected</h3>
+      ${incident.sampleAlert ? `<div class="panel"><div class="kicker">Related past incidents</div><ul class="archive">${result.nearby.map(record=>
+        `<li><strong>${html(record.title)}</strong> ${ref(record.id)}<br><small>${result.exact.includes(record) ? 'Matching error signature' : 'Same service · Different error signature'}</small></li>`
+      ).join('') || '<li>No past incident recorded for this service.</li>'}</ul></div>` :
+      `<div class="panel"><div class="kicker">Impact and priority</div><h3>${incidentPriority(incident)} · ${incident.affectedPct}% of monitored operations affected</h3>
       <p>Confirmed: ${incident.confirmed.join(', ')}.<br>Possible downstream impact: ${incident.possible.join(', ')}.</p>
-      <details><summary>Why this priority?</summary><p>Suggested ${priority(incident)}. ${incident.core ? 'Customer-facing service.' : 'Internal or indirect customer impact.'} Priority considers the affected share and whether the service is customer-facing. ${historical ? `Previous incident ${historical.id} was ${historical.priority}.` : ''}</p></details>
-      ${money ? `<details><summary>${estimate} in orders at risk</summary><p>${minutes} min × ${money.low}–${money.high} affected orders/min × ${cad(money.order)} per order. Fictional inputs through ${snapshotTime} ET. Orders may be delayed or recovered.</p>
-      <label for="cost-window">Explore duration: <output id="cost-minutes">${minutes} minutes</output></label><input type="range" class="range" id="cost-window" min="0" max="60" value="${minutes}">
-      <p id="cost-projection" role="status">${estimate} at this duration</p></details>` : '<small>Financial impact unknown.</small>'}</div>
+      ${priorityExplanation(incident)}</div>`}
     </div>
-    ${result.relatedAlerts.length > 1 ? `<div class="panel block"><details><summary>${result.relatedAlerts.length} alerts grouped into this incident</summary><p>The monitors fired in the same minute and reported the same upstream error. Checkout depends on Payments API.</p>
+    ${incident.sampleAlert ? `<section class="panel block">${priorityExplanation(incident)}</section>` : ''}
+    ${result.relatedAlerts.length > 1 ? `<div class="panel block"><details open><summary>${result.relatedAlerts.length} alerts grouped into this incident</summary><p>The alerts share an error code and fired within five minutes on the same service or a linked dependency.</p>
     <ul class="archive">${result.relatedAlerts.map(event=>`<li>${html(event.service)} · ${html(event.time)} ET · ${ref(event.id)}</li>`).join('')}</ul><small>Shared cause remains a working hypothesis.</small></details></div>` : ''}
-    <div class="panel block"><details><summary>Recovery checks</summary><p>${html(incident.verify)}</p></details></div>`;
+    <div class="panel block"><details><summary>Recovery checks</summary><p>${html(result.verify)}</p></details></div>`;
 }
 
 function caseDetails(incident,result) {
@@ -412,19 +590,19 @@ function caseDetails(incident,result) {
       <div><dt>Confirmed impact</dt><dd>${html(incident.confirmed.join(', '))}</dd></div>
       <div><dt>Possible downstream impact</dt><dd>${html(incident.possible.join(', '))}</dd></div>
     </dl>
-    <section class="panel block"><h3>What the records show</h3><ol class="archive">${result.findings.map(finding=>`<li><p>${html(finding.text)}</p><div class="references">${finding.ids.map(ref).join('')}</div></li>`).join('')}</ol></section>
-    <section class="panel block"><h3>Open questions</h3><ul>${incident.unknowns.map(question=>`<li>${html(question)}</li>`).join('')}</ul><p><strong>First check:</strong> ${html(incident.next)}</p></section>
+    <section class="panel block"><h3>Observed evidence</h3><ol class="archive">${result.findings.map(finding=>`<li><p>${html(finding.text)}</p><div class="references">${finding.ids.map(ref).join('')}</div></li>`).join('')}</ol></section>
+    <section class="panel block"><h3>Unknowns</h3><ul>${incident.unknowns.map(question=>`<li>${html(question)}</li>`).join('')}</ul><p><strong>First check</strong> · ${html(result.next)}</p></section>
     <section class="panel block"><h3>Raw records in this snapshot</h3><ul class="archive">${result.evidence.map(event=>`<li><div class="row"><strong>${html(event.title)}</strong>${ref(event.id)}</div><small>${html(event.kind)} · Available at ${event.seen} ET</small><p>${html(event.detail)}</p></li>`).join('')}</ul></section>`;
 }
 
-function incidentRunbooks(result) {
+function incidentRunbooks(incident,result) {
   if (!result.observed) return '<p>The alert had not fired at this point in the replay.</p>';
   const guide = result.guide;
   return `<div class="lead"><h3>${result.verifiedDocument ? 'Procedure linked to the matching past fix' : 'No verified fix for this error signature'}</h3>
     <p>${result.verifiedDocument ? 'Check the runbook preconditions against the current evidence before following it.' : 'The documentation below can help you investigate or compare this alert with a different case.'}</p></div>
     ${guide ? `<section class="panel block"><div class="kicker">${html(guide.kind)}</div><h3>${html(guide.title)}</h3><p>${html(guide.useWhen)}</p>
     <ol class="archive">${guide.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
-    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}</section>` : ''}
+    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}${freshnessPanel(guide,incident.serviceVersion)}</section>` : ''}
     ${result.relatedDocuments.length ? `<section class="panel block"><h3>Related archive documentation</h3><p>Compare the preconditions and error signature before using a procedure from another incident.</p><div class="references">${result.relatedDocuments.map(documentLink).join('')}</div></section>` : ''}`;
 }
 
@@ -439,16 +617,19 @@ function trace(result) {
 }
 
 function times(incident) {
-  return [...new Set(incident.events.map(event=>event.seen))].sort();
+  return [...new Set(incident.events.map(event=>event.seenAt ?? event.seen))].sort((a,b)=>
+    typeof a==='number' ? a-b : a.localeCompare(b));
 }
+
+const snapshotLabel = snapshot => typeof snapshot==='number' ? formatIncidentTime(snapshot) : snapshot+' ET';
 
 function replay(incident, result) {
   const stamps = times(incident);
   const index = cutoff === '23:59' ? stamps.length - 1 : stamps.indexOf(cutoff);
   return `<div class="row"><h3>What did we know at the time?</h3><button class="small" data-live>Latest snapshot</button></div>
     <p class="quiet">Scrub through when evidence first became available.</p>
-    <label for="replay-range">Evidence available at <strong class="mono" id="replay-time">${stamps[index]} ET</strong></label>
-    <input class="range" id="replay-range" type="range" min="0" max="${stamps.length - 1}" value="${index}" aria-valuetext="${stamps[index]} ET">
+    <label for="replay-range">Evidence available at <strong class="mono" id="replay-time">${snapshotLabel(stamps[index])}</strong></label>
+    <input class="range" id="replay-range" type="range" min="0" max="${stamps.length - 1}" value="${index}" aria-valuetext="${snapshotLabel(stamps[index])}">
     <div id="replay-details">${replayDetails(incident,result)}</div>`;
 }
 
@@ -459,12 +640,68 @@ function replayDetails(incident,result) {
 
 function compare(incident, result) {
   if (!result.observed) return '<p>The alert has not fired at this point in the replay.</p>';
-  const record = result.exact[0] || result.nearby[0];
-  if (!record) return '<p>No relevant incident found in the sample archive.</p>';
-  const match = incident.fingerprint === record.fingerprint;
-  return `<p class="lead"><strong>${match ? 'Same service and error signature.' : 'Same service, different error signature.'}</strong><br>${match ? 'Verify the earlier fix applies to the current environment.' : 'Treat the old resolution as background only.'}</p>
-    <div class="duo"><section class="panel"><div class="kicker">Current / ${incident.id}</div><h3>${html(incident.title)}</h3><p class="mono">${incident.fingerprint}</p><p>${workspace.custom[incident.id] ? 'Test severity: '+simulationSeverities[incident.level] : 'Suggested priority: '+priority(incident)}</p><p>${html(result.cause)}</p></section>
-    <section class="panel"><div class="kicker">Previous / ${record.id}</div><h3>${html(record.title)}</h3><p class="mono">${record.fingerprint}</p><p>${record.priority} · ${html(record.responder)}</p><p>${html(record.fix || 'The responder did not document a fix.')}</p>${ref(record.id)}</section></div>`;
+  return `<div class="lead"><div class="kicker">Current incident</div><h3>${html(incident.title)}</h3>
+    <p>${html(incident.service)} · ${html(incident.fingerprint || 'Error signature unknown')}${incident.serviceVersion ? ' · Version '+html(incident.serviceVersion) : ''}</p></div>
+    <ol class="archive comparison-list">${result.comparisons.map(({record,match,reasons})=>`<li class="panel">
+      <div class="row"><h3>${html(record.title)}</h3>${ref(record.id)}</div>
+      <span class="badge neutral">${match?'Signature match':'Related record'}</span>
+      <p>${reasons.map(html).join(' · ')}</p><small>${html(record.priority)} · ${html(record.responder)}</small>
+      ${record.fix ? `<p>${html(record.fix)}</p>` : ''}</li>`).join('') || '<li>No relevant incidents in History.</li>'}</ol>`;
+}
+
+function familyTree(incident,result) {
+  if (!result.observed) return '<p>The alert has not fired at this point in the replay.</p>';
+  const previous = result.comparisons.map(({record,match})=>({
+    id:record.id,time:record.resolvedAt || Date.parse(record.date+' 2026 12:00 UTC'),
+    date:record.resolvedAt ? formatIncidentTime(record.resolvedAt) : record.date,
+    kind:match ? 'Same error' : 'Related incident', title:record.title,
+    detail:record.fix ? `Previous fix · ${record.fix}` : `${record.service} · ${record.fingerprint || 'Error code unknown'}`
+  }));
+  const current = [...result.changes,...result.relatedAlerts].map(event=>({
+    id:event.id,time:event.timeAt ?? sampleMonitoringTime(event.time),date:snapshotLabel(event.timeAt ?? event.time),
+    kind:event.kind==='Alert' ? 'Incoming alert' : event.version ? 'Release' : event.kind,title:event.title,detail:event.detail
+  }));
+  if (!current.some(event=>event.kind==='Incoming alert')) {
+    const alert = result.evidence.find(event=>event.kind==='Alert');
+    if (alert) current.push({id:alert.id,time:alert.timeAt ?? sampleMonitoringTime(alert.time),date:snapshotLabel(alert.timeAt ?? alert.time),
+      kind:'Incoming alert',title:alert.title,detail:alert.detail});
+  }
+  const response = [];
+  if (result.guide) response.push({id:result.guide.id,kind:'Current procedure',date:result.guide.updated,
+    title:result.guide.title,detail:result.verifiedDocument ? 'Linked to the matching fix' : result.guide.kind});
+  const saved = cutoff==='23:59' && !workspace.active.includes(incident.id) ? workspace.resolutions[incident.id] : null;
+  if (saved) response.push({id:saved.id,kind:'Reviewed resolution',date:formatIncidentTime(saved.resolvedAt),title:saved.fix,detail:saved.verification});
+  const branches = [
+    {name:'History',type:'history',nodes:previous.sort((a,b)=>a.time-b.time)},
+    {name:'Alerts & changes',type:'evidence',nodes:current.sort((a,b)=>a.time-b.time)},
+    {name:'Response',type:'response',nodes:response},
+  ].filter(branch=>branch.nodes.length);
+  const renderNodes = (nodes,graphical = false)=>nodes.map((node,index)=>`<li${graphical ? ` style="--family-position:${Math.min(index,7)}"` : ''}>
+    <button type="button" class="family-node" data-source="${html(node.id)}">
+      <span class="family-node-meta"><span>${html(node.kind)}</span><span>${html(node.date)}</span></span>
+      <strong>${html(node.title)}</strong><span class="family-node-detail">${html(node.detail)}</span>
+      ${graphical ? `<span class="family-node-ref"><span>${html(node.id)}</span><span aria-hidden="true">↗</span></span>` : ''}
+    </button></li>`).join('');
+  const viewControl = `<div class="family-view-switch" role="group" aria-label="Family tree view">
+    ${[['map','Map'],['list','List']].map(([view,label])=>`<button type="button" class="small" data-family-view="${view}" aria-pressed="${familyView===view}">${label}</button>`).join('')}</div>`;
+  const ordered = [...previous,...current].sort((a,b)=>a.time-b.time).concat(response);
+  return `<section aria-labelledby="family-title">
+    <div class="row family-heading"><div><h3 id="family-title">Incident family tree</h3><p class="quiet">Select a record to open its evidence.</p></div>${viewControl}</div>
+    ${familyView==='list' ? `<ol class="family-tree">${renderNodes(ordered)}</ol>` :
+      `<div class="family-graphic">
+        <button type="button" class="family-root" data-tab="details" aria-label="Open case details for ${html(incident.title)}">
+          <span class="family-root-meta"><span class="family-root-signal" aria-hidden="true"></span>
+            <span>${html(incident.id)}</span><span>${html(incidentPriority(incident))}</span></span>
+          <strong>${html(incident.title)}</strong><span>${html(incident.service)} · ${html(incident.alert)} ET</span>
+        </button>
+        <div class="family-branches">
+          ${branches.map((branch,index)=>`<section class="family-branch" data-family-branch="${branch.type}" style="--family-column:${index}">
+            <h4><span aria-hidden="true"></span>${html(branch.name)} <small>${branch.nodes.length}</small></h4>
+            <ol>${renderNodes(branch.nodes,true)}</ol>
+          </section>`).join('')}
+        </div>
+      </div>`}
+  </section>`;
 }
 
 const serviceNames = services.map(service=>service.name);
@@ -478,11 +715,30 @@ function earliestLocalTrigger() {
 
 function publishSimulation(state,record,now) {
   if (!releaseSimulation(record,now)) return;
-  if (location.protocol.startsWith('http')) {
+  const candidates = state.active.map(id=>state.custom[id]).filter(item=>item && Boolean(item.localOnly)===Boolean(record.localOnly))
+    .map(item=>asInvestigation(item));
+  const match = record.status==='resolved' ? undefined : groupDuplicate(asInvestigation(record),candidates);
+  if (match) {
+    const parent = state.custom[match.id];
+    record.groupedUnder = parent.id;
+    const previous = parent.level;
+    if (record.level < previous) {
+      parent.level = record.level;
+      recordPriority(state,parent.id,previous,parent.level,`Grouped ${record.level} alert from ${record.service}.`,actor,now);
+      if (record.level==='P1' && !record.localOnly && location.protocol.startsWith('http')) {
+        record.telegram = {status:'pending',nextAt:now,attempts:0,level:record.level,simulation:simulationPayload(parent)};
+      }
+    }
+    state.analyses[parent.id] = {status:'queued',revision:record.id};
+    notification(state,parent.id,'Alert grouped',`${record.title} · Same error code within five minutes · ${record.service}`);
+    return;
+  }
+  state.analyses[record.id] = {status:'queued'};
+  if (!record.localOnly && location.protocol.startsWith('http')) {
     record.telegram = {status:'pending',nextAt:now,attempts:0,level:record.level,simulation:simulationPayload(record)};
   }
   if (record.status !== 'resolved') state.active.push(record.id);
-  notification(state,record.id,record.title,`Simulation fired · ${record.service} · ${testStatus(record)}`);
+  notification(state,record.id,record.title,`Investigation ready · ${record.service} · ${testStatus(record)}`);
 }
 
 function simulator() {
@@ -501,13 +757,22 @@ function simulator() {
     <p data-simulation-telegram-hint>${simulationTelegramHint()}</p></div>
     <div class="buttons"><button class="small" data-run-burst>Run all four severities</button>
     <button class="small danger" data-reset-custom ${count?'':'disabled'}>Reset custom simulations</button></div></section>
+    <section class="template-section" aria-labelledby="investigation-template-title"><h2 id="investigation-template-title">Challenge 4 alert feed</h2>
+    <p class="quiet">Each alert uses the sample monitoring timeline. Its brief appears on the Desk and the notification stays in the app.</p>
+    <ul class="template-grid">${investigationTemplates.map((item,index)=>`<li class="template-card ${item.level}">
+      ${badge(item.level)}<h3>${html(item.title)}</h3><p>${html(item.service)}</p>
+      <button class="small primary" data-investigation-template="${index}" aria-label="Send sample: ${html(item.title)}">Send sample alert</button></li>`).join('')}</ul></section>
     <section class="template-section" aria-labelledby="template-title"><h2 id="template-title">Demo scenarios</h2>
     <ul class="template-grid">${templates}</ul></section>
     <div class="simulator-grid">
     <section class="panel simulator-editor"><h2>Create custom incident</h2><form id="simulation-form" class="simulation-form">
       <label class="wide">Incident title<input name="title" required maxlength="100" value="${html(draft.title)}"></label>
-      <label class="wide">Description<textarea name="description" required maxlength="1600" rows="4">${html(draft.description)}</textarea></label>
+      <label class="wide">Description<textarea name="description" required maxlength="1600" rows="4" aria-describedby="signature-hint">${html(draft.description)}</textarea>
+      <small id="signature-hint">Use fictional alert text. Include an error code such as JWKS_CACHE_MISS so Aurelis can match it to sample records.</small></label>
       <label>Service<select name="service" required>${options([['','Choose a service'],...serviceNames.map(value=>[value,value])],draft.service || '')}</select></label>
+      <label>Company <small>Optional · fictional data</small><input name="company" maxlength="80" list="sample-companies" value="${html(draft.company)}"></label>
+      <datalist id="sample-companies">${sampleCompanies.map(name=>`<option value="${html(name)}"></option>`).join('')}</datalist>
+      <label>Service version <small>Optional</small><input name="serviceVersion" maxlength="40" value="${html(draft.serviceVersion)}"></label>
       <label>Category<select name="category">${options(simulationCategories.map(value=>[value,value]),draft.category || 'Availability')}</select></label>
       <label>Incident type<input name="type" required maxlength="70" value="${html(draft.type)}" placeholder="e.g. Service outage"></label>
       <label>Severity<select name="level">${options(Object.entries(simulationSeverities),draft.level || 'P3')}</select></label>
@@ -515,6 +780,7 @@ function simulator() {
       <label>Affected area <small>Optional</small><input name="area" maxlength="120" value="${html(draft.area)}"></label>
       <label>Initial status<select name="status">${options(Object.entries(simulationStatuses),draft.status || 'reported')}</select></label>
       <label>Incident timestamp <small>Optional · device time</small><input name="occurred" type="datetime-local" value="${html(draft.occurred)}"></label>
+      <p class="wide quiet small">The sample change and log records are dated ${sampleMonitoringDate} (Eastern Time).</p>
       <label class="wide">Recommended actions <small>Optional</small><textarea name="actions" maxlength="1000" rows="3">${html(draft.actions)}</textarea></label>
       <label>Trigger<select name="trigger">${options([['immediate','Immediately'],['scheduled','At a scheduled time']],scheduled?'scheduled':'immediate')}</select></label>
       <label data-scheduled-field ${scheduled?'':'hidden'}>Trigger time <small>Device time</small><input name="scheduled" type="datetime-local" step="1" min="${earliestLocalTrigger()}" value="${html(draft.scheduled)}" ${scheduled?'required':'disabled'}></label>
@@ -537,7 +803,7 @@ function previewSimulation(values) {
     <div class="row">${testBadge}<span class="badge ${input.level}">${simulationSeverities[input.level]}</span></div>
     <h3>${html(input.title)}</h3><p class="chat-answer">${html(input.description)}</p>
     <dl class="case-facts">
-      <div><dt>Service</dt><dd>${html(input.service)}</dd></div><div><dt>Initial status</dt><dd>${simulationStatuses[input.status]}</dd></div>
+      <div><dt>Service</dt><dd>${html(input.service)}</dd></div><div><dt>Company</dt><dd>${html(input.company || 'Unassigned')}</dd></div><div><dt>Initial status</dt><dd>${simulationStatuses[input.status]}</dd></div>
       <div><dt>Category and type</dt><dd>${html(input.category)} · ${html(input.type)}</dd></div>
       ${input.location ? `<div><dt>Location</dt><dd>${html(input.location)}</dd></div>` : ''}
       ${input.area ? `<div><dt>Affected area</dt><dd>${html(input.area)}</dd></div>` : ''}
@@ -553,8 +819,8 @@ function templateValues(index) {
   return {...simulationTemplates[index],trigger:'immediate',status:'reported'};
 }
 
-async function createIncidents(values,batch = false) {
-  const firstId = await createSimulationBatch(values,batch);
+async function createIncidents(values,batch = false,localOnly = false) {
+  const firstId = await createSimulationBatch(values,batch,localOnly);
   if (!firstId) return;
   simulatorDraft = {};
   if (dialog.open) dialog.close();
@@ -562,7 +828,7 @@ async function createIncidents(values,batch = false) {
   else render();
 }
 
-async function createSimulationBatch(values,batch) {
+async function createSimulationBatch(values,batch,localOnly) {
   let firstId;
   const succeeded = await update(state=>{
     const now = Date.now();
@@ -571,6 +837,7 @@ async function createSimulationBatch(values,batch) {
     for (const input of inputs) {
       const id = 'SIM-' + crypto.randomUUID().split('-').at(-1).toUpperCase();
       const record = createSimulation(input,actor,now,id);
+      if (localOnly) record.localOnly = true;
       state.custom[id] = record;
       publishSimulation(state,record,now);
       firstId ||= id;
@@ -581,6 +848,7 @@ async function createSimulationBatch(values,batch) {
 }
 
 function openCase(id) {
+  id = workspace.custom[id]?.groupedUnder || id;
   if (!byId(id)) return;
   if (dialog.open) dialog.close();
   choose(id);
@@ -589,11 +857,7 @@ function openCase(id) {
   requestAnimationFrame(()=>document.querySelector('.case h2')?.focus({preventScroll:false}));
 }
 
-function simulationCase(incident,tab,result) {
-  if (tab==='runbook') return incidentRunbooks(result);
-  if (tab==='trace') return trace(result);
-  if (tab==='replay') return replay(incident,result);
-  if (tab==='compare') return compare(incident,result);
+function simulationCase(incident,result) {
   const activity = incident.activity.slice().reverse().map(item=>`<li><div class="row"><strong>${html(item.status)}${item.level?' · '+simulationSeverities[item.level]:''}</strong>
     <small>${html(formatIncidentTime(item.time))}</small></div><small>${html(item.who)}</small>
     ${item.note?`<p class="chat-answer">${html(item.note)}</p>`:''}</li>`).join('');
@@ -607,21 +871,181 @@ function simulationCase(incident,tab,result) {
       ${incident.area?`<div><dt>Affected area</dt><dd>${html(incident.area)}</dd></div>`:''}
       <div><dt>Latest responder</dt><dd>${html(incident.responder || 'Unassigned')}</dd></div>
     </dl>
-    <section class="panel block"><h3>Recommended next step</h3><p class="chat-answer">${html(incident.next)}</p></section>
+    ${incident.actions ? `<section class="panel block"><h3>Reporter’s suggested actions</h3><p class="chat-answer">${html(incident.actions)}</p></section>` : ''}
+    ${result.observed ? `<section class="panel block"><h3>Raw evidence</h3><ul class="archive">${result.evidence.map(event=>
+      `<li><strong>${html(event.title)}</strong> ${ref(event.id)}<p>${html(event.detail)}</p></li>`).join('')}</ul></section>` : ''}
     <section class="panel block"><h3>Incident activity</h3><ol class="archive">${activity}</ol></section>`;
 }
 
 function editSimulation(record, status) {
-  const heading = {acknowledged:'Acknowledge incident',resolved:'Resolve incident'}[status];
+  if (status==='resolved') { openResolution(record.id,record.level); return; }
+  const heading = {acknowledged:'Acknowledge incident'}[status];
   openDialog(record.id+' / Test event',heading || 'Update incident',`
     <p><strong>${html(record.title)}</strong></p>
     <form class="simulation-form" data-edit-simulation="${record.id}">
       <label>Status<select name="status">${options(Object.entries(simulationStatuses),status ?? record.status)}</select></label>
       <label>Severity<select name="level">${options(Object.entries(simulationSeverities),record.level)}</select></label>
       <label class="wide">Update note <small>Optional</small><textarea name="note" rows="3" maxlength="500"></textarea></label>
+      <label class="wide">Reason for severity change <small>When changing severity</small><input name="priorityReason" maxlength="300"></label>
       <div class="buttons wide"><button type="button" class="small" data-close>Cancel</button>
       <button class="small primary" type="submit">${heading || 'Save update'}</button></div>
     </form>`);
+}
+
+function openResolution(id,level,note = '',priorityReason = '') {
+  const incident = byId(id);
+  if (!incident || incident.triggeredAt===null) return;
+  const current = workspace.resolutions[id];
+  const matching = investigateCase(incident,'23:59').exact.filter(record=>record.fix);
+  const runbooks = documents.filter(document=>document.service===incident.service);
+  openDialog(id,'Resolve incident',`
+    <p>${html(incident.title)}</p>
+    <form class="simulation-form" data-resolution-form="${html(id)}">
+      <input type="hidden" name="level" value="${html(level || incidentPriority(incident))}">
+      <input type="hidden" name="priorityReason" value="${html(priorityReason)}">
+      ${matching.length ? `<label class="wide">Start from a previous fix<select data-resolution-template>
+        ${options([['','Write a new resolution'],...matching.map(record=>[record.id,`${record.id} · ${record.title}`])],'')}</select></label>` : ''}
+      <label class="wide">Resolution notes <small>Optional · fictional data only</small><textarea name="notes" rows="3" maxlength="1600" placeholder="What caused the incident, what you changed, and how you checked recovery">${html(note)}</textarea></label>
+      <div class="wide buttons"><button type="button" class="small" data-draft-resolution ${connected?'':'disabled'}>Format notes with Gemini</button>
+      <span class="small quiet" data-resolution-feedback role="status">${connected?'':'Fill in the review fields directly when Gemini is unavailable.'}</span></div>
+      <label class="wide">Confirmed cause<textarea name="cause" required maxlength="500" rows="2">${html(current?.cause)}</textarea></label>
+      <label class="wide">Fix applied<textarea name="fix" required maxlength="500" rows="2">${html(current?.fix)}</textarea></label>
+      <label class="wide">How recovery was verified<textarea name="verification" required maxlength="500" rows="2">${html(current?.verification)}</textarea></label>
+      <label>Service version <small>Optional</small><input name="version" maxlength="40" value="${html(current?.version || incident.serviceVersion)}"></label>
+      <label>Runbook actually used<select name="runbook">${options([['','None recorded'],...runbooks.map(item=>[item.id,item.id+' · '+item.title])],current?.runbook || '')}</select></label>
+      <div class="buttons wide"><button type="button" class="small" data-close>Cancel</button>
+        <button class="small primary" type="submit">Save reviewed resolution</button></div>
+    </form>`);
+}
+
+async function draftResolution(button) {
+  const form = button.form;
+  const status = form.querySelector('[data-resolution-feedback]');
+  const incident = byId(form.dataset.resolutionForm);
+  const notes = form.elements.notes.value.trim();
+  if (!notes) { status.textContent = 'Enter your resolution notes first.'; form.elements.notes.focus(); return; }
+  button.disabled = true;
+  status.textContent = 'Gemini is formatting your notes…';
+  try {
+    const response = await fetch('/api/resolution',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({...aiIncidentPayload(incident),notes})});
+    if (!response.ok) throw Error();
+    const draft = await response.json();
+    if (form.isConnected) {
+      for (const name of ['cause','fix','verification']) {
+        if (draft[name] && !form.elements[name].value.trim()) form.elements[name].value = draft[name];
+      }
+      status.textContent = 'Draft ready. Review the fields and add any missing details before saving.';
+    }
+  } catch {
+    if (form.isConnected) status.textContent = 'Gemini is unavailable. You can complete and save these fields directly.';
+  } finally { button.disabled = false; }
+}
+
+function recordPriority(state,id,previous,level,reason,who,time) {
+  if (previous===level) return;
+  const changes = state.priorityHistory[id] ||= [];
+  changes.unshift({previous,level,reason,who,time});
+  changes.length = Math.min(changes.length,20);
+}
+
+function incidentWork(incident,state) {
+  const {id,title,service} = incident;
+  const openedAt = state.arrivals[id] ?? incident.triggeredAt ?? sampleMonitoringTime(incident.alert);
+  const task = state.tasks[id];
+  const acknowledged = incident.activity?.find(item=>item.status==='Acknowledged' && item.time>=openedAt);
+  const localAcceptance = task?.acceptedAt>=openedAt ? {acceptedAt:task.acceptedAt,acceptedBy:task.by}
+    : acknowledged ? {acceptedAt:acknowledged.time,acceptedBy:acknowledged.who} : {};
+  return {key:id+'/'+openedAt,incident:id,title,service,openedAt,company:incident.company,fingerprint:incident.fingerprint,
+    level:incidentPriority(incident,state),...localAcceptance};
+}
+
+function localReportEvents(state = workspace) {
+  const rows = new Map(Object.entries(state.workHistory));
+  for (const id of [...new Set([...state.active,...Object.keys(state.resolutions),...Object.keys(state.custom)])]) {
+    const incident=byId(id,state);
+    if (!incident || incident.triggeredAt===null || incident.groupedUnder) continue;
+    const row=incidentWork(incident,state);
+    if (rows.has(row.key)) continue;
+    const saved=!state.active.includes(id) && state.resolutions[id];
+    if (saved?.resolvedAt>=row.openedAt) {
+      Object.assign(row,{closedAt:saved.resolvedAt,closedBy:saved.responder,via:'website',verified:true,fix:saved.fix});
+    } else if (incident.status==='resolved') {
+      const event=incident.activity.findLast(item=>item.status==='Resolved' && item.time>row.openedAt);
+      if (event) Object.assign(row,{closedAt:event.time,closedBy:event.who,via:'website'});
+    }
+    rows.set(row.key,row);
+  }
+  return [...rows.values()];
+}
+
+function applyTelegramCompletion(state,route) {
+  if (route.stage!=='completed' || route.completedVia!=='telegram' || !state.active.includes(route.incident)) return;
+  const incident=byId(route.incident,state);
+  if (!incident) return;
+  const timing=incidentWork(incident,state);
+  if (route.created<timing.openedAt || route.completedAt<timing.openedAt || state.workHistory[timing.key]) return;
+  state.workHistory[timing.key]={...timing,acceptedAt:route.acceptedAt,acceptedBy:route.acceptedBy,
+    closedAt:route.completedAt,closedBy:route.completedBy,via:'telegram'};
+  for (const record of Object.values(state.custom).filter(item=>item.id===incident.id || item.groupedUnder===incident.id)) {
+    updateSimulation(record,{status:'resolved',level:record.level,note:'Marked fixed in Telegram.'},route.completedBy,route.completedAt);
+  }
+  state.active=state.active.filter(id=>id!==incident.id && state.custom[id]?.groupedUnder!==incident.id);
+  notification(state,incident.id,`Fixed in Telegram · ${incident.title}`,'Completion time recorded. Add the reviewed resolution when ready.');
+}
+
+async function syncReportEvents() {
+  if (!location.protocol.startsWith('http')) return;
+  if (reportSyncBusy) {
+    reportSyncAt=0;
+    return;
+  }
+  reportSyncBusy=true;
+  reportSyncAt=Date.now()+8000;
+  try {
+    const sent=[];
+    for (const [key,job] of Object.entries(workspace.reportOutbox).slice(0,5)) {
+      await deliveryApi('telegram-complete',job,AbortSignal.timeout(8000));
+      sent.push(key);
+    }
+    const result=await deliveryApi('telegram-report-events',undefined,AbortSignal.timeout(6000));
+    if (!Array.isArray(result.events)) return;
+    if (sent.length || JSON.stringify(result.events)!==JSON.stringify(workspace.telegramWork)) {
+      await update(state=>{
+        state.telegramWork=result.events;
+        sent.forEach(key=>delete state.reportOutbox[key]);
+        for (const route of result.events) applyTelegramCompletion(state,route);
+      });
+    }
+  } catch {
+    // The local report remains available while Telegram reconnects.
+  } finally { reportSyncBusy=false; }
+}
+
+function saveResolution(state,id,fields,who,now) {
+  const incident = byId(id,state);
+  if (!incident || incident.triggeredAt===null || incident.groupedUnder) throw Error('Open the active incident to save its resolution.');
+  const reviewed = validateReviewedResolution(fields);
+  if (reviewed.runbook && !documents.some(item=>item.id===reviewed.runbook && item.service===incident.service)) {
+    throw Error('Choose a runbook for this service.');
+  }
+  const custom = state.custom[id];
+  const timing = incidentWork(incident,state);
+  const previous = state.workHistory[timing.key];
+  const closedAt = previous?.closedAt || now;
+  const closedBy = previous?.closedBy || who;
+  const level = custom && Object.hasOwn(simulationSeverities,fields.level) ? fields.level : incidentPriority(incident,state);
+  recordPriority(state,id,incidentPriority(incident,state),level,String(fields.priorityReason || 'Recorded at incident closure.').trim(),who,now);
+  state.resolutions[id] = {...reviewed,id,title:incident.title,service:incident.service,company:incident.company,
+    fingerprint:incident.fingerprint,priority:level,responder:closedBy,resolvedAt:closedAt,reviewedAt:now};
+  state.workHistory[timing.key] = {...timing,...previous,level,closedAt,closedBy,via:previous?.via || 'website',verified:true,fix:reviewed.fix};
+  if (!previous && location.protocol.startsWith('http')) state.reportOutbox[timing.key] = {incident:id,openedAt:timing.openedAt,completedAt:closedAt,who};
+  for (const record of Object.values(state.custom).filter(item=>item.id===id || item.groupedUnder===id)) {
+    updateSimulation(record,{status:'resolved',level:record.id===id ? level : record.level,
+      note:record.id===id ? reviewed.fix : `Resolved with ${id}.`},closedBy,now);
+  }
+  state.active = state.active.filter(item=>item!==id && state.custom[item]?.groupedUnder!==id);
+  notification(state,id,`Resolved · ${incident.title}`,'Reviewed resolution saved to History.');
 }
 
 function deleteSimulations(state,ids) {
@@ -630,6 +1054,22 @@ function deleteSimulations(state,ids) {
     delete state.custom[id];
     delete state.tasks[id];
     delete state.priorities[id];
+    delete state.analyses[id];
+    delete state.priorityHistory[id];
+    delete state.resolutions[id];
+    delete state.arrivals[id];
+    delete state.exposure[id];
+  }
+  for (const [key,record] of Object.entries(state.workHistory)) {
+    if (targets.has(record.incident)) {
+      delete state.workHistory[key];
+      delete state.reportOutbox[key];
+    }
+  }
+  for (const record of Object.values(state.custom)) {
+    if (!targets.has(record.groupedUnder)) continue;
+    delete record.groupedUnder;
+    if (record.status!=='resolved' && !state.active.includes(record.id)) state.active.push(record.id);
   }
   for (const key of Object.keys(state.notes)) {
     if (targets.has(key.split('/')[0])) delete state.notes[key];
@@ -682,11 +1122,11 @@ function desk() {
   const queue = openIncidents().sort((a,b)=>incidentPriority(a).localeCompare(incidentPriority(b)));
   const incident = byId(selected) || queue[0] || scenarios[0];
   const custom = workspace.custom[incident.id];
-  const result = investigate(incident,cutoff);
+  const result = investigateCase(incident);
   const severityCounts = radarLevels.map(level=>({
     level,count:queue.filter(item=>incidentPriority(item)===level).length,
   }));
-  const content = {brief:()=>brief(incident,result), details:()=>caseDetails(incident,result), runbook:()=>incidentRunbooks(result), trace:()=>trace(result), replay:()=>replay(incident,result), compare:()=>compare(incident,result)};
+  const content = {brief:()=>brief(incident,result), details:()=>custom ? simulationCase(incident,result) : caseDetails(incident,result), runbook:()=>incidentRunbooks(incident,result), trace:()=>trace(result), replay:()=>replay(incident,result), compare:()=>compare(incident,result), family:()=>familyTree(incident,result)};
   return `<section class="hero intro"><div><div class="kicker">On-call desk / Brampton AI Innovator</div><h1>THE INCIDENT <em>DESK.</em></h1><p>Review alerts, follow the evidence, and get an engineer on the case.</p></div>
     ${incidentRadar(queue,severityCounts)}</section>
     <div class="stats"><div class="stat"><strong data-stat="services">${services.length}</strong><small>Services monitored</small></div><div class="stat"><strong data-stat="active">${queue.length}</strong><small>Active incidents</small></div>
@@ -699,18 +1139,19 @@ function desk() {
       <div class="simulate"><div class="simulate-head"><span class="kicker">Prepared alerts</span><button class="small" data-reset>Reset prepared alerts</button></div>
       <p class="small quiet" data-auto-telegram-hint>${automaticTelegram?'Prepared alerts automatically route to Telegram when triggered.':'Prepared alerts stay in the dashboard while Telegram automation is off.'}</p>
       <div class="buttons">${scenarios.map(item=>`<button class="small" data-trigger="${item.id}">${item.variant}</button>`).join('')}</div></div></aside>
-      <article class="case"><div class="case-head"><div class="case-top"><span class="case-meta">${incident.id} / ${html(incident.service)} / ${incident.alert} ET</span>
+      <article class="case"><div class="case-head"><div class="case-top"><span class="case-meta">${incident.id} / ${html(incident.service)} / ${incident.alert} ET${incident.company ? ' / '+html(incident.company) : ''}</span>
       <div class="actions">${custom?.triggeredAt===null ? '' : '<button class="small" data-handoff>Draft handoff</button><button class="primary small" data-assistant>✳ Ask assistant</button>'}</div></div>
       <h2 tabindex="-1">${html(incident.title)}</h2><div class="row"><p>${badge(incidentPriority(incident))} ${custom ? testBadge+' <span class="status-chip">'+testStatus(custom)+'</span>' : `<small>${incident.variant}</small>`}
-      ${cutoff === '23:59' ? '' : ' <small>· Replay through ' + cutoff + ' ET</small>'}</p>
-      ${custom?'':'<button class="small" data-priority>Change priority</button>'}</div></div>
+      ${cutoff === '23:59' ? '' : ' <small>· Replay through ' + snapshotLabel(cutoff) + '</small>'}</p>
+      ${custom?'':`<div class="buttons"><button class="small" data-priority>Change priority</button>
+        <button class="small" data-resolve-incident="${incident.id}">${workspace.active.includes(incident.id)?'Resolve':'Review resolution'}</button></div>`}</div></div>
       ${custom ? `<div class="handoff"><div class="buttons">
         ${custom.triggeredAt!==null ? `${custom.status==='reported'?'<button class="small primary" data-test-status="acknowledged">Acknowledge</button>':''}
-        <button class="small" data-test-status="update">Update incident</button>${custom.status!=='resolved'?'<button class="small" data-test-status="resolved">Resolve</button>':''}
-        <button class="small" data-notify-telegram="${custom.id}">Notify in Telegram</button>${simulationTelegramStatus(custom)}` : ''}
+        <button class="small" data-test-status="update">Update incident</button><button class="small" data-resolve-incident="${incident.id}">${custom.status==='resolved'?'Review resolution':'Resolve'}</button>
+        ${custom.localOnly ? '' : `<button class="small" data-notify-telegram="${custom.id}">Notify in Telegram</button>${simulationTelegramStatus(custom)}`}` : ''}
         <button class="small danger" data-delete-custom="${custom.id}">${custom.triggeredAt===null?'Cancel schedule':'Delete test event'}</button></div></div>` : taskBar(incident)}
-      ${custom?.triggeredAt===null ? '' : `<div class="tabs" role="group" aria-label="Incident details">${tabs.filter(([key])=>!custom || key!=='details').map(([key,label])=>`<button class="tab" data-tab="${key}" aria-pressed="${key===activeTab}">${label}</button>`).join('')}</div>`}
-      <div class="case-content" id="case-content">${custom ? simulationCase(incident,activeTab,result) : content[activeTab]()}</div></article>
+      ${custom?.triggeredAt===null ? '' : `<div class="tabs" role="group" aria-label="Incident details">${tabs.map(([key,label])=>`<button class="tab" data-tab="${key}" aria-pressed="${key===activeTab}">${label}</button>`).join('')}</div>`}
+      <div class="case-content" id="case-content">${custom?.triggeredAt===null ? simulationCase(incident,result) : content[activeTab]()}</div></article>
     </div>`;
 }
 
@@ -729,12 +1170,168 @@ function serviceList() {
   }).join('') || '<p>No services match the filter.</p>';
 }
 function historyList() {
+  const reviewed = reviewedArchive().sort((a,b)=>b.resolvedAt-a.resolvedAt)
+    .map(record=>({...record,date:formatIncidentTime(record.resolvedAt),test:Boolean(workspace.custom[record.id]),reviewed:true}));
   const resolved = Object.values(workspace.custom).filter(record=>record.triggeredAt!==null && record.status==='resolved')
+    .filter(record=>!workspace.resolutions[record.id])
     .sort((a,b)=>b.updatedAt-a.updatedAt).map(record=>({...record,test:true,date:formatIncidentTime(record.updatedAt),priority:record.level}));
-  return [...resolved,...history].filter(record=>[...Object.values(record),record.test?'test event':''].join(' ').toLowerCase().includes(query)).map(record=>
+  return [...reviewed,...resolved,...history].filter(record=>[...Object.values(record),record.test?'test event':''].join(' ').toLowerCase().includes(query)).map(record=>
     `<li class="row"><div><span class="mono quiet">${html(record.date)} · ${record.id}</span><h3>${html(record.title)}</h3>
-    <p>${html(record.service)} · ${html(record.responder || record.owner)} · ${record.test ? 'Resolved test event' : record.fix ? 'Fix documented' : 'Fix missing'}</p></div>
-    <div class="buttons">${badge(record.priority)} ${record.test ? `<button class="small" data-open-case="${record.id}">View incident</button>` : ref(record.id)}</div></li>`).join('') || '<li>No incidents match the filter.</li>';
+    <p>${html(record.service)} · ${html(record.responder || record.owner)} · ${record.reviewed ? 'Reviewed fix' : record.test ? 'Resolved test event' : record.fix ? 'Fix documented' : 'Fix missing'}</p></div>
+    <div class="buttons">${badge(record.priority)} ${record.test && !record.reviewed ? `<button class="small" data-open-case="${record.id}">View incident</button>` : ref(record.id)}</div></li>`).join('') || '<li>No incidents match the filter.</li>';
+}
+
+const reportChannels = {website:'Website',telegram:'Telegram',sample:'Demo history'};
+
+function reportData() {
+  const period=reportPeriod(reportRange,reportOffset);
+  const entries=mergeIncidentWork(localReportEvents(),workspace.telegramWork);
+  if (includeSampleReports) entries.push(...demoReportEvents);
+  const companyOptions=[...new Map(entries.map(row=>[companyKey(row.company),companyLabel(row.company)||'Unassigned'])).entries()]
+    .sort((a,b)=>a[1].localeCompare(b[1]));
+  const selectedCompany=reportCompany===null ? 'All companies' : companyOptions.find(([key])=>key===reportCompany)?.[1] || 'Unassigned';
+  const summary=reportSummary(reportCompany===null ? entries : entries.filter(row=>companyKey(row.company)===reportCompany),period);
+  const {opened,resolved,companies,repeated,buckets,mttr,timed}=summary;
+  const sampleIncidents=new Set([...opened,...resolved].filter(row=>row.via==='sample').map(row=>row.key)).size;
+  const metrics={period:period.label,company:selectedCompany,opened:opened.length,resolved:resolved.length,sampleIncidents,
+    averageMinutes:mttr===null ? null : Math.round(mttr/60_000),timed,companies:companies.slice(0,8),
+    repeated:repeated.slice(0,8),trend:buckets.map(bucket=>({name:bucket.label,opened:bucket.opened,resolved:bucket.resolved}))};
+  return {period,summary,companyOptions,metrics,key:JSON.stringify(metrics)};
+}
+
+function reportInsight(report) {
+  const entry=reportInsights.get(report.key);
+  if (!report.metrics.opened && !report.metrics.resolved) return '<p class="quiet">There were no recorded incidents in this view.</p>';
+  if (entry?.data) {
+    const {overview,patterns,nextStep}=entry.data;
+    return `<p class="report-ai-overview">${html(overview)}</p><div class="report-ai-details">
+      <div><strong>Recurring pattern</strong><p>${html(patterns)}</p></div><div><strong>Where to look next</strong><p>${html(nextStep)}</p></div></div>`;
+  }
+  if (checkingGemini || connected && entry?.status!=='failed') return '<p class="quiet" role="status">Gemini is reviewing the selected report…</p>';
+  const leading=report.summary.companies.find(company=>company.opened>0);
+  const repeat=report.summary.repeated[0];
+  return `<p class="quiet">Gemini analysis is currently unavailable.</p>
+    <p>${report.metrics.opened} opened and ${report.metrics.resolved} resolved.${leading ? ' '+html(leading.name)+' recorded '+leading.opened+' opening'+(leading.opened===1?'':'s')+'.' : ''}
+    ${repeat ? ' '+html(repeat.fingerprint)+' appeared '+repeat.count+' times at '+html(repeat.company)+'.' : ' No repeat signatures were recorded in this view.'}</p>
+    ${connected ? '<button class="small" data-retry-report>Retry Gemini analysis</button>' : ''}`;
+}
+
+function scheduleReportInsight() {
+  clearTimeout(reportInsightTimer);
+  if (!connected || view()!=='reports') return;
+  const report=reportData();
+  if ((!report.metrics.opened && !report.metrics.resolved) || reportInsights.has(report.key)) return;
+  reportInsightTimer=setTimeout(async()=>{
+    if (view()!=='reports' || reportData().key!==report.key || reportInsights.has(report.key)) return;
+    reportInsights.set(report.key,{status:'loading'});
+    try {
+      const response=await fetch('/api/report-analysis',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:report.key,signal:AbortSignal.timeout(15_000)});
+      if (!response.ok) throw Error();
+      reportInsights.set(report.key,{data:await response.json()});
+    } catch {
+      reportInsights.set(report.key,{status:'failed'});
+    }
+    if (reportInsights.size>24) reportInsights.delete(reportInsights.keys().next().value);
+    if (view()==='reports' && reportData().key===report.key) {
+      const panel=document.querySelector('[data-report-insight]');
+      if (panel) panel.innerHTML=reportInsight(report);
+    }
+  },350);
+}
+
+const reportColors=['#536e4f','#8b5a84','#346c86','#b8693a','#7a7540','#7764a2','#467b7a','#a24d5a'];
+
+function reportDonut(items,centerLabel) {
+  const total=items.reduce((sum,item)=>sum+item.count,0);
+  let start=0;
+  const stops=items.filter(item=>item.count>0).map(item=>{
+    const from=start;
+    start+=item.count/total*100;
+    return `${item.color} ${from}% ${start}%`;
+  }).join(',');
+  return `<div class="report-donut" style="--donut:${total ? `conic-gradient(${stops})` : 'var(--rule)'}"
+    role="img" aria-label="${html(centerLabel)} · ${total} total"><div><strong>${total}</strong><span>${html(centerLabel)}</span></div></div>`;
+}
+
+function reports() {
+  const report=reportData();
+  const {period,companyOptions}=report;
+  const {opened,resolved,people,buckets,mttr,timed,companies,repeated}=report.summary;
+  const chartMax=Math.max(1,...buckets.flatMap(bucket=>[bucket.opened,bucket.resolved]));
+  const responderMax=Math.max(1,...people.map(person=>person.count));
+  const reportKeys={week:'Weekly',month:'Monthly',year:'Yearly'};
+  const channelCounts=Object.entries(reportChannels).map(([key,label],index)=>({key,label,count:resolved.filter(row=>row.via===key).length,color:[reportColors[1],reportColors[2],reportColors[3]][index]}));
+  const companySlices=companies.map((company,index)=>({...company,count:company.opened,color:reportColors[index%reportColors.length]}));
+  const repeatMax=Math.max(1,...repeated.map(item=>item.count));
+  return layout('Reports.','Track what came in, what got fixed, and how long the response took.',`
+    <section class="report-controls panel">
+      <div class="buttons" role="group" aria-label="Report frequency">${Object.entries(reportKeys).map(([key,label])=>
+        `<button class="small" data-report-range="${key}" aria-pressed="${key===reportRange}">${label}</button>`).join('')}</div>
+      <div class="report-date"><button class="small" data-report-offset="-1" aria-label="Previous report period">←</button>
+        <strong>${period.label}</strong><button class="small" data-report-offset="1" aria-label="Next report period" ${reportOffset===0?'disabled':''}>→</button></div>
+      <label class="small">Company<select id="report-company">${options([['','All companies'],...companyOptions.map(([key,name])=>['company:'+key,name])],
+        reportCompany===null ? '' : 'company:'+reportCompany)}</select></label>
+      <label class="small"><input type="checkbox" id="report-samples" ${includeSampleReports?'checked':''}> Include demo history</label>
+    </section>
+    <div class="report-kpis">
+      <section class="panel report-kpi"><div class="kicker">Incidents opened</div><strong>${opened.length}</strong><small>Alert arrived during this period</small></section>
+      <section class="panel report-kpi"><div class="kicker">Incidents resolved</div><strong>${resolved.length}</strong><small>Fix recorded during this period</small></section>
+      <section class="panel report-kpi"><div class="kicker">Mean time to resolve</div><strong>${durationLabel(mttr)}</strong><small>Alert → fixed · ${timed} timed</small></section>
+      <section class="panel report-kpi"><div class="kicker">Responders</div><strong>${people.length}</strong><small>People credited with a fix</small></section>
+    </div>
+    <div class="report-breakdown">
+      <section class="panel report-distribution"><div class="row"><h2>Incidents by company</h2><small>Selected period · Eastern Time</small></div>
+        <div class="report-donut-layout">${reportDonut(companySlices,'Opened')}
+          <div class="report-company-list">${companySlices.map(company=>`<div class="report-company-row">
+            <span class="report-dot" style="--slice-color:${company.color}" aria-hidden="true"></span>
+            <strong>${html(company.name)}</strong><small>${company.opened} opened · ${company.resolved} fixed</small></div>`).join('') || '<p class="quiet">No company activity in this view.</p>'}</div>
+        </div>
+      </section>
+      <section class="panel report-distribution"><h2>Resolution channels</h2>
+        <div class="report-donut-layout">${reportDonut(channelCounts,'Resolved')}
+          <div class="report-company-list">${channelCounts.map(item=>`<div class="report-company-row">
+            <span class="report-dot" style="--slice-color:${item.color}" aria-hidden="true"></span><strong>${item.label}</strong><small>${item.count}</small></div>`).join('')}</div>
+        </div>
+      </section>
+    </div>
+    <section class="panel report-ai"><div class="row"><h2>AI analysis</h2><span class="badge neutral">Gemini</span></div>
+      <div data-report-insight aria-live="polite">${reportInsight(report)}</div></section>
+    <div class="report-overview">
+      <section class="panel report-activity"><div class="row"><div><h2>Incident activity</h2><p class="quiet">Openings and resolutions across the period.</p></div>
+        <div class="report-legend"><span data-report-series="opened">Opened</span><span data-report-series="closed">Resolved</span></div></div>
+        <div class="report-chart-scroll"><ol class="report-chart" style="--bucket-count:${buckets.length}" aria-label="Incident activity by date">
+          ${buckets.map(bucket=>`<li aria-label="${bucket.label}, ${bucket.opened} opened, ${bucket.resolved} resolved">
+            <div class="report-column" aria-hidden="true">
+              <span data-report-series="opened" style="--bar-height:${bucket.opened/chartMax*100}%"><b>${bucket.opened || ''}</b></span>
+              <span data-report-series="closed" style="--bar-height:${bucket.resolved/chartMax*100}%"><b>${bucket.resolved || ''}</b></span>
+            </div><small>${bucket.label}</small></li>`).join('')}
+        </ol></div>
+      </section>
+      <section class="panel report-repeats"><h2>Repeated issues</h2><p class="quiet">The same error code on the same service and company.</p>
+        <ol class="report-repeat-list">${repeated.map(issue=>`<li>
+          <div class="row"><strong class="mono">${html(issue.fingerprint)}</strong><span class="badge neutral">${issue.count} incidents</span></div>
+          <small>${html(issue.company)} · ${html(issue.service)}</small>
+          <div class="report-person-bar" aria-hidden="true"><i style="width:${issue.count/repeatMax*100}%"></i></div></li>`).join('') || '<li>No repeated signatures recorded in this view.</li>'}</ol>
+      </section>
+    </div>
+    <section class="panel report-responders"><h2>Responder workload</h2>
+      <p class="quiet">Work time runs from acceptance to completion when the same responder recorded both events.</p>
+      <ol class="report-people">${people.map(person=>`<li><strong>${html(person.name)}</strong>
+        <div class="report-person-bar" aria-hidden="true"><i style="width:${person.count/responderMax*100}%"></i></div>
+        <span>${person.count} fixed</span><span><strong>${durationLabel(person.average)}</strong> avg · ${person.timed} timed</span></li>`).join('') || '<li>No responders recorded for this period.</li>'}</ol>
+    </section>
+    <section class="panel report-log"><h2>Resolution log</h2>
+    ${resolved.length ? `<div class="report-table-scroll" role="region" aria-label="Resolution log table" tabindex="0"><table>
+      <thead><tr><th scope="col">Incident</th><th scope="col">Fixed by</th><th scope="col">Fixed at (ET)</th><th scope="col">Alert → fix</th><th scope="col">Accepted → fix</th><th scope="col">Recorded in</th></tr></thead>
+      <tbody>${resolved.map(row=>{
+        const matchingPerson=row.acceptedBy?.toLowerCase()===row.closedBy?.toLowerCase();
+        const elapsed=matchingPerson && Number.isFinite(row.acceptedAt) && row.acceptedAt>=row.openedAt ? row.closedAt-row.acceptedAt : null;
+        return `<tr><td>${row.via!=='sample' && byId(row.incident) ? `<button class="small" data-open-case="${html(row.incident)}">${html(row.title)}</button>` : `<strong>${html(row.title)}</strong>`}
+          <small>${html(row.incident)} · ${html(row.service)} · ${html(companyLabel(row.company) || 'Unassigned')}</small>${row.fix ? `<small class="report-fix">${html(row.fix)}</small>` : ''}</td><td>${html(row.closedBy || 'Responder unknown')}</td>
+          <td>${html(formatIncidentTime(row.closedAt))}</td><td>${durationLabel(row.closedAt-row.openedAt)}</td><td>${durationLabel(elapsed)}</td>
+          <td>${html(reportChannels[row.via])}${row.verified ? '<small>Reviewed resolution</small>' : ''}</td></tr>`;
+      }).join('')}</tbody></table></div>` : '<p class="quiet">No resolutions recorded for this period.</p>'}</section>`);
 }
 function documentList() {
   return documents.filter(document=>[document.id,document.title,document.service,document.kind,document.useWhen,document.incident].join(' ').toLowerCase().includes(query)).map(document=>`
@@ -839,12 +1436,13 @@ function render() {
     ? new Map([...main.querySelectorAll('.queue-item')].slice(0,12).map(item=>[item.dataset.case,item.getBoundingClientRect().top]))
     : new Map();
   const content = {
-    desk, calendar, chat, simulator, alerts:alertInbox,
+    desk, calendar, chat, simulator, reports, alerts:alertInbox,
     services:()=>layout('Service inventory.','The 30 fictional cloud services in this workspace.',`<div class="service-grid" id="list">${serviceList()}</div>`,true),
     history:()=>layout('Incident archive.','Compare previous causes, owners, priorities and documented fixes.',`<ul class="archive" id="list">${historyList()}</ul>`,true),
     runbooks:()=>layout('Runbook library.','Search the sample database for service procedures, recovery checks, and investigation guides.',`<ul class="archive" id="list">${documentList()}</ul>`,true)
   };
   main.innerHTML = content[page]();
+  scheduleReportInsight();
   if (pageChanged) {
     const initial = renderedPage===undefined;
     workspaceEntrance = undefined;
@@ -880,7 +1478,7 @@ function render() {
     if (link.dataset.view === page) link.setAttribute('aria-current','page');
     else link.removeAttribute('aria-current');
   });
-  const count = Object.values(workspace.tasks).filter(task=>task.status==='open').length;
+  const count = workspace.active.filter(id=>workspace.tasks[id]?.status==='open').length;
   const countLabel = document.querySelector('#chat-count');
   countLabel.hidden = !count;
   countLabel.textContent = count;
@@ -980,23 +1578,29 @@ function source(id) {
       <ol class="archive">${document.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
       <p><strong>When to pause</strong><br>${html(document.stopWhen)}</p>
       <p><strong>How to verify recovery</strong><br>${html(document.verify)}</p>
-      ${document.incident ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}`);
+      ${document.incident ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}
+      ${freshnessPanel(document,byId(selected)?.service===document.service ? byId(selected).serviceVersion : undefined)}`);
     return;
   }
-  const record = history.find(item=>item.id===id);
+  const record = reviewedArchive().find(item=>item.id===id) || history.find(item=>item.id===id);
   if (record) {
-    const procedure = documents.find(item=>item.incident===record.id);
-    openDialog('Incident archive / ' + id,record.title,`<p>${html(record.service)} · ${record.date} · ${record.priority} · ${html(record.responder)}</p>
+    const procedure = documents.find(item=>item.incident===record.id || item.id===record.runbook);
+    openDialog('Incident archive / ' + id,record.title,`<p>${html(record.service)} · ${html(record.resolvedAt ? formatIncidentTime(record.resolvedAt) : record.date)} · ${record.priority} · ${html(record.responder)}</p>
       <p><strong>Prior cause</strong><br>${html(record.cause)}</p><p><strong>Documented resolution</strong><br>${html(record.fix || 'No resolution steps recorded.')}</p>
+      ${record.verification ? `<p><strong>Recovery verification</strong><br>${html(record.verification)}</p>` : ''}
+      ${record.version ? `<p><strong>Verified service version</strong> · ${html(record.version)}</p>` : ''}
+      ${record.resolvedAt ? `<button class="small" data-open-case="${html(record.id)}">Open incident</button>` : ''}
       ${procedure ? `<div class="block">${documentLink(procedure)}</div>` : '<p class="quiet">No runbook is linked to this archive record.</p>'}`);
     return;
   }
-  const event = [...scenarios,...Object.values(workspace.custom).map(asInvestigation)].flatMap(item=>item.events).find(item=>item.id===id);
-  if (event) openDialog(event.kind + ' / ' + id,event.title,`<p>${html(event.detail)}</p><p class="mono">Occurred ${event.time} ET · Available ${event.seen} ET</p>`);
+  const event = byId(selected)?.events.find(item=>item.id===id) ||
+    [...scenarios,...Object.values(workspace.custom).map(asInvestigation)].flatMap(item=>item.events).find(item=>item.id===id);
+  if (event) openDialog(event.kind + ' / ' + id,event.title,`<p>${html(event.detail)}</p>
+    <p class="mono">Occurred ${snapshotLabel(event.timeAt ?? event.time)} · Available ${snapshotLabel(event.seenAt ?? event.seen)}</p>`);
 }
 function draft() {
   const incident = byId(selected);
-  const result = investigate(incident,cutoff);
+  const result = investigateCase(incident);
   if (!result.observed) {
     openDialog('Draft handoff',incident.title,'<p>No incident brief exists at this point in the replay.</p>');
     return;
@@ -1006,11 +1610,11 @@ function draft() {
     `Owner: ${workspace.tasks[incident.id]?.by || 'Not confirmed'}`,
     workspace.custom[incident.id] && 'Test event · Submitted symptoms: ' + incident.description,
     `Working hypothesis: ${result.cause}`,
-    `Evidence: ${incident.causeSources.join(', ')}`,
+    `Evidence: ${result.causeSources.join(', ')}`,
     result.alternative && `Alternative: ${incident.alternative} [${result.alternative.id}]`,
-    `Next check: ${incident.next}`,
+    `Next check: ${result.next}`,
     result.guide && `Documentation: ${result.guide.id} · ${result.guide.title}`,
-    `Recovery check: ${incident.verify}`,
+    `Recovery check: ${result.verify}`,
     'Confirmed cause and actual resolution: [Engineer to complete]'
   ].filter(Boolean).join('\n');
   const draftKey = incident.id + '/' + cutoff;
@@ -1134,8 +1738,11 @@ const remainingSeconds = deadline=>Math.max(0,Math.ceil((deadline-Date.now())/10
 function routeDetails(route) {
   const deadline=route.stage==='waiting'&&route.deadline ? `<p>Reply by <strong>${html(new Date(route.deadline).toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'2-digit',minute:'2-digit',second:'2-digit'}))} ET</strong> · <strong class="mono" role="timer" aria-live="off" data-telegram-deadline="${route.deadline}">${remainingSeconds(route.deadline)}s</strong> remaining</p>` : '';
   const reason={critical:'Sent directly to the group because this alert is P1 Critical.',decline:'The private responder declined.',timeout:'The private response window expired.',unavailable:'Telegram did not confirm the private page.'}[route.reason];
-  return `<p><strong>${html(routeLabels[route.stage])}</strong>${route.acceptedBy?' · '+html(route.acceptedBy):''} ${route.test?testBadge:''}</p>
+  return `<p><strong>${html(route.stage==='completed'?'Fixed':routeLabels[route.stage])}</strong>${route.acceptedBy?' · '+html(route.acceptedBy):''} ${route.test?testBadge:''}</p>
     ${route.owner&&!route.acceptedBy&&['queued-private','sending-private','waiting'].includes(route.stage)?`<p>Responder: ${html(route.owner)}</p>`:''}${deadline}
+    ${route.acceptedAt ? `<p>Accepted ${html(formatIncidentTime(route.acceptedAt))}</p>` : ''}
+    ${route.completedAt ? `<p>Fixed by ${html(route.completedBy)} · ${html(formatIncidentTime(route.completedAt))}
+      ${route.acceptedAt && route.acceptedAt<=route.completedAt ? ' · '+durationLabel(route.completedAt-route.acceptedAt)+' from acceptance' : ''}</p>` : ''}
     ${reason?`<p>${html(reason)}</p>`:''}${route.notice?`<p>${html(route.notice)}</p>`:''}`;
 }
 
@@ -1201,8 +1808,8 @@ function simulationTelegramHint() {
 }
 
 function simulationPayload(record) {
-  const {title,description,service,status,actions}=record;
-  return {title,description,service,status,actions};
+  const {title,description,service,company,status,actions}=record;
+  return {title,description,service,company,status,actions};
 }
 
 function simulationTelegramStatus(record) {
@@ -1220,7 +1827,7 @@ async function deliverSimulation(record) {
   let failure;
   try {
     result=await deliveryApi('telegram-alert-event',{
-      event:'simulation-'+record.id,incident:record.id,level,simulation
+      event:'simulation-'+record.id,incident:record.groupedUnder || record.id,level,simulation
     },AbortSignal.timeout(15_000));
   }catch(error){failure=error;}
   try {
@@ -1394,7 +2001,7 @@ async function trackTelegramRoute(id,initial) {
         slot.innerHTML=routeDetails(route);
         lastRoute=snapshot;
       }
-      if(['accepted','failed'].includes(route.stage))return;
+      if(['completed','failed'].includes(route.stage))return;
       await new Promise(resolve=>setTimeout(resolve,3000));
     }
   }catch(error){if(slot.isConnected)slot.textContent=error.message;}
@@ -1527,6 +2134,7 @@ function showDeliveryPreview(preview) {
 function changePriority() {
   const incident = byId(selected);
   openDialog(incident.id,'Change priority',`<p>Suggested priority: <strong>${priority(incident)}</strong>. Current priority: <strong>${incidentPriority(incident)}</strong>.</p>
+    <label for="priority-reason">Reason for changing priority</label><input id="priority-reason" required maxlength="300" placeholder="e.g. Checkout failures spread to another region">
     <div class="buttons">${levels.map(level=>`<button data-set-level="${level}">${level}</button>`).join('')}<button data-set-level="suggested">Use suggested priority</button></div>`);
 }
 
@@ -1534,20 +2142,26 @@ function fallback(incident,result,question) {
   if (!result.observed) return 'The incident had not fired in this snapshot. Move the replay forward to see the brief.';
   const q = question.toLowerCase();
   if (workspace.custom[incident.id]) {
-    if (/runbook|document|similar|before|fix|compar/.test(q)) {
-      return ['The submitted report has no verified matching fix.',...result.relatedDocuments.map(document=>
-        `Reference only: [${document.id}] ${document.title}. ${document.useWhen}`),`First check: ${incident.next}`].join('\n\n');
-    }
-    if (/verif|recovery|resolved/.test(q)) return [incident.verify,incident.activity.findLast(item=>item.note)?.note].filter(Boolean).join('\n\n');
+    if (/verif|recovery|resolved/.test(q)) return [
+      result.guide ? `[${result.guide.id}] ${result.verify}` : result.verify,
+      incident.activity.findLast(item=>item.note)?.note
+    ].filter(Boolean).join('\n\n');
     if (/priorit|urgent|impact|cost|money/.test(q)) {
       return `This test event is ${simulationSeverities[incident.level]} (${incident.level}). The reported scope is ${incident.area || incident.service}. The report provides no measured customer impact or loss estimate.`;
     }
-    return [
-      `Test event · ${simulationSeverities[incident.level]} · ${testStatus(incident)}`,
-      `Reported for ${incident.service}: ${incident.description}`,
-      'The submitted report contains no verified cause.',
-      `Recommended next step: ${incident.next}`,
-    ].join('\n\n');
+    if (/what changed|deploy|maintenance/.test(q)) return result.changes.map(item=>
+      `${item.time} ET: ${item.title}. ${item.detail} [${item.id}]`).join('\n') || 'No same-service changes were available within two hours of this alert.';
+    if (/runbook|document|procedure/.test(q) && result.guide) {
+      return [`[${result.guide.id}] ${result.guide.title}`,result.guide.useWhen,`First check: ${result.next}`,`Pause if: ${result.guide.stopWhen}`].join('\n\n');
+    }
+    if (/runbook|document|similar|before|fix|compar/.test(q)) {
+      return [result.known ? `[${result.known.id}] ${result.known.responder} documented this fix: ${result.known.fix}`
+        : 'No known fix for this alert.',result.guide && `[${result.guide.id}] ${result.guide.title}`,
+        ...result.relatedDocuments.map(document=>`Reference: [${document.id}] ${document.title}.`),
+        `First check: ${result.next}`].filter(Boolean).join('\n\n');
+    }
+    return [result.cause,`Evidence: ${result.causeSources.join(', ')}`,
+      `Reported for ${incident.service}: ${incident.description}`,`First check: ${result.next}`].join('\n\n');
   }
   if (/verif|recovery|resolved/.test(q) && result.guide) {
     return `[${result.guide.id}] ${result.guide.verify}\n\n${incident.verify}`;
@@ -1585,7 +2199,7 @@ function assistant() {
   }
   const incident = byId(selected);
   assistantWindow.innerHTML = `<div class="dialog-head"><div><div class="kicker">Incident assistant / ${incident.id}</div><h2 id="assistant-title">Ask about this incident</h2></div><button data-close aria-label="Close assistant">✕</button></div><div class="dialog-body" role="region" aria-label="Incident assistant conversation" tabindex="0">
-    <p class="quiet" id="assistant-mode">${workspace.custom[incident.id] ? 'Test event · Uses the local report and sample library.' : connected ? 'Gemini · Uses the selected evidence snapshot.' : 'Demo mode · Answers come from the sample records.'}</p>
+    <p class="quiet" id="assistant-mode">${connected ? 'Gemini · Uses the selected evidence snapshot.' : 'Demo mode · Answers come from the sample records.'}</p>
     <div class="buttons">${['What happened, in detail?', 'Which runbook should I use?', incident.document==='DG-023' ? 'What would distinguish the likely causes?' : 'Have we seen this before?', 'How should I verify recovery?'].map(q=>`<button class="small" data-prompt="${html(q)}">${html(q)}</button>`).join('')}</div>
     <form id="assistant-form"><input id="question" aria-label="Ask the incident assistant" maxlength="400" placeholder="Ask about the evidence…" required>
     <button class="primary" type="submit">Ask</button><button type="button" data-mic title="Speak a question using browser dictation">Mic</button></form>
@@ -1599,7 +2213,7 @@ function assistant() {
 function refreshAssistantDocument() {
   const holder = assistantWindow.querySelector('#answer-document');
   if (!holder) return;
-  const result = investigate(byId(selected),cutoff);
+  const result = investigateCase(byId(selected));
   holder.innerHTML = result.guide
     ? `<small>${result.verifiedDocument ? 'Procedure for the matching incident' : 'Documentation for this investigation'}</small><div>${documentLink(result.guide)}</div>` : '';
 }
@@ -1622,16 +2236,17 @@ async function ask(question, speak = false) {
     conversation = [];
     conversationScope = scope;
   }
-  const result = investigate(incident,snapshot);
+  const result = investigateCase(incident,snapshot);
   const revision = ++dialogRevision;
   let reply = fallback(incident,result,question);
   let ids = [...new Set(reply.match(/\b(?:INC|RB|DG|ALT|CHG|LOG|MET|SUP|EXT|MNT)-\d+\b/g) || [])];
   if (workspace.custom[incident.id] && result.observed) ids.unshift(incident.causeSources[0]);
-  let label = workspace.custom[incident.id] ? 'Test event · Based on the local report.' : 'Demo mode · Based on sample records.';
-  if (connected && !workspace.custom[incident.id]) {
+  let label = incident.sampleAlert ? 'Test event · Based on the automatic brief and sample records.' : 'Demo mode · Based on sample records.';
+  if (connected) {
     try {
       const earlierQuestions = conversation.map(turn=>turn.question);
-      const response = await fetch('/api/ask', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:incident.id,cutoff:snapshot,question,earlierQuestions})});
+      const response = await fetch('/api/ask', {method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({...aiIncidentPayload(incident),cutoff:snapshot,question,earlierQuestions})});
       if (!response.ok) throw Error();
       const data = await response.json();
       reply = data.answer;
@@ -1727,7 +2342,12 @@ document.addEventListener('click',event=>{
     const incident = byId(data.trigger);
     choose(incident.id);
     void update(state=>{
-      if (!state.active.includes(incident.id)) state.active.push(incident.id);
+      if (!state.active.includes(incident.id)) {
+        state.active.push(incident.id);
+        state.arrivals[incident.id]=Date.now();
+        delete state.tasks[incident.id];
+      } else if (!state.tasks[incident.id]?.acceptedAt) state.arrivals[incident.id] ??= Date.now();
+      state.analyses[incident.id] ??= {status:'queued'};
       notification(state,incident.id,'Sample alert received',incident.title);
       if (incidentPriority(incident,state)==='P1' && !state.tasks[incident.id]) pageOnCall(state,incident);
       return `Simulated alert received: ${incident.title}.`;
@@ -1748,18 +2368,41 @@ document.addEventListener('click',event=>{
     simulatorDraft = templateValues(Number(data.loadTemplate));
     render();
     document.querySelector('#simulation-form input').focus();
-  } else if ('fireTemplate' in data || 'runBurst' in data || 'confirmSimulation' in data) {
+  } else if ('investigationTemplate' in data || 'fireTemplate' in data || 'runBurst' in data || 'confirmSimulation' in data) {
     button.disabled = true;
     button.setAttribute('aria-busy','true');
     const batch = 'runBurst' in data;
-    const entries = batch ? simulationTemplates.map((_,index)=>templateValues(index))
+    const sample = investigationTemplates[Number(data.investigationTemplate)];
+    const entries = sample ? [{...sample,occurred:new Date(sample.occurredAt).toISOString(),trigger:'immediate',status:'reported'}]
+      : batch ? simulationTemplates.map((_,index)=>templateValues(index))
       : ['fireTemplate' in data ? templateValues(Number(data.fireTemplate)) : {...simulatorDraft}];
-    void createIncidents(entries,batch).finally(()=>{
+    void createIncidents(entries,batch,Boolean(sample)).finally(()=>{
       button.disabled=false;
       button.removeAttribute('aria-busy');
     });
   } else if (data.testStatus && workspace.custom[selected]) {
     editSimulation(workspace.custom[selected],data.testStatus==='update' ? undefined : data.testStatus);
+  } else if (data.resolveIncident) {
+    openResolution(data.resolveIncident);
+  } else if ('draftResolution' in data) {
+    void draftResolution(button);
+  } else if (data.familyView==='map' || data.familyView==='list') {
+    familyView = data.familyView;
+    render();
+  } else if (Object.hasOwn({week:true,month:true,year:true},data.reportRange)) {
+    reportRange=data.reportRange;
+    reportOffset=0;
+    render();
+  } else if (data.reportOffset==='-1' || data.reportOffset==='1') {
+    reportOffset=Math.min(0,reportOffset+Number(data.reportOffset));
+    render();
+  } else if ('retryReport' in data) {
+    reportInsights.delete(reportData().key);
+    render();
+  } else if ('editExposure' in data) {
+    editExposure();
+  } else if (data.resetExposure) {
+    void update(state=>{delete state.exposure[data.resetExposure];dialog.close();});
   } else if (data.deleteCustom || 'resetCustom' in data) {
     const record = workspace.custom[data.deleteCustom];
     const scheduled = record?.triggeredAt===null;
@@ -1776,6 +2419,8 @@ document.addEventListener('click',event=>{
       deleteSimulations(state,ids);
       return data.confirmDelete==='all' ? 'Custom simulations reset.' : 'Test event removed.';
     }).then(saved=>{if (saved && button.isConnected) dialog.close(); else button.disabled = false;});
+  } else if (data.retryAnalysis) {
+    void update(state=>{state.analyses[data.retryAnalysis] = {status:'queued'};}).then(runNextAnalysis);
   } else if (data.source) source(data.source);
   else if ('live' in data) { cutoff='23:59'; render(); }
   else if ('handoff' in data) draft();
@@ -1848,10 +2493,20 @@ document.addEventListener('click',event=>{
   else if (data.setLevel) {
     const incident = byId(selected);
     if (!levels.includes(data.setLevel) && data.setLevel !== 'suggested') return;
+    const reasonInput = dialog.querySelector('#priority-reason');
+    const reason = reasonInput.value.trim();
+    if (data.setLevel!=='suggested' && data.setLevel!==incidentPriority(incident) && !reason) {
+      reasonInput.setCustomValidity('Describe what changed.');
+      reasonInput.reportValidity();
+      reasonInput.setCustomValidity('');
+      return;
+    }
     void update(state=>{
+      const previous = incidentPriority(incident,state);
       state.priorities ||= {};
       if (data.setLevel === 'suggested') delete state.priorities[incident.id];
       else state.priorities[incident.id] = data.setLevel;
+      recordPriority(state,incident.id,previous,incidentPriority(incident,state),reason || 'Returned to the suggested priority based on the sample impact.',actor,Date.now());
       dialog.close();
       return `Priority set to ${incidentPriority(incident,state)}.`;
     });
@@ -1897,17 +2552,54 @@ document.addEventListener('submit',event=>{
     event.preventDefault();
     const id = form.dataset.editSimulation;
     const fields = Object.fromEntries(new FormData(form));
+    if (fields.level!==workspace.custom[id]?.level && !fields.priorityReason.trim()) {
+      const reason = form.elements.priorityReason;
+      reason.setCustomValidity('Describe what changed.');
+      reason.reportValidity();
+      reason.setCustomValidity('');
+      return;
+    }
+    if (fields.status==='resolved') { openResolution(id,fields.level,fields.note,fields.priorityReason); return; }
     const submit = form.querySelector('[type=submit]');
     submit.disabled = true;
     void update(state=>{
       const record = state.custom[id];
       if (!record) throw Error('This test event was removed.');
       const now = Date.now();
+      const previous = record.level;
+      if (record.status==='resolved' && fields.status!=='resolved') state.arrivals[id]=now;
       if (!updateSimulation(record,fields,actor,now)) return 'The incident is already up to date.';
-      if (record.status==='resolved') state.active = state.active.filter(item=>item!==id);
-      else if (!state.active.includes(id)) state.active.push(id);
+      recordPriority(state,id,previous,record.level,fields.priorityReason.trim(),actor,now);
+      if (!state.active.includes(id) && !record.groupedUnder) state.active.push(id);
       notification(state,id,`${testStatus(record)} · ${record.title}`,fields.note.trim() || `Updated by ${actor}`);
     }).then(saved=>{if (saved && submit.isConnected) dialog.close(); else submit.disabled=false;});
+    return;
+  }
+  if (form.matches('[data-resolution-form]')) {
+    event.preventDefault();
+    const fields = Object.fromEntries(new FormData(form));
+    const submit = form.querySelector('[type=submit]');
+    submit.disabled = true;
+    void update(state=>saveResolution(state,form.dataset.resolutionForm,fields,actor,Date.now()))
+      .then(saved=>{
+        if (saved && submit.isConnected) dialog.close();
+        else submit.disabled=false;
+        if (saved) void syncReportEvents();
+      });
+    return;
+  }
+  if (form.matches('[data-exposure-form]')) {
+    event.preventDefault();
+    const fields=Object.fromEntries(new FormData(form));
+    const assumptions={low:Number(fields.low),high:Number(fields.high),order:Number(fields.order)};
+    if (!Object.values(assumptions).every(value=>Number.isFinite(value) && value>=0 && value<=100_000_000) ||
+        assumptions.low>assumptions.high) {
+      form.elements.high.setCustomValidity('The upper rate must be at least the lower rate.');
+      form.elements.high.reportValidity();
+      form.elements.high.setCustomValidity('');
+      return;
+    }
+    void update(state=>{state.exposure[form.dataset.exposureForm]=assumptions;dialog.close();});
     return;
   }
   if(form.matches('[data-telegram-notice-form]')){
@@ -1984,10 +2676,11 @@ document.addEventListener('input',event=>{
     document.querySelector('#alert-list').innerHTML = alertCards();
   }
   if (event.target.id === 'cost-window') {
-    const money = byId(selected).money;
+    const incident=byId(selected);
     const minutes = Number(event.target.value);
+    exposureWindows.set(incident.id,minutes);
     document.querySelector('#cost-minutes').textContent = `${minutes} minutes`;
-    document.querySelector('#cost-projection').textContent = `${cad(money.low*money.order*minutes)}–${cad(money.high*money.order*minutes)} CAD at this duration`;
+    document.querySelector('#cost-projection').textContent = exposureLabel(incidentExposure(incident),minutes);
   }
   if (event.target.id === 'search') {
     query = event.target.value.trim().toLowerCase();
@@ -1997,13 +2690,42 @@ document.addEventListener('input',event=>{
   if (event.target.id === 'replay-range') {
     const incident = byId(selected);
     cutoff = times(incident)[Number(event.target.value)];
-    event.target.setAttribute('aria-valuetext',cutoff + ' ET');
-    document.querySelector('#replay-time').textContent = cutoff + ' ET';
-    document.querySelector('#replay-details').innerHTML = replayDetails(incident,investigate(incident,cutoff));
+    event.target.setAttribute('aria-valuetext',snapshotLabel(cutoff));
+    document.querySelector('#replay-time').textContent = snapshotLabel(cutoff);
+    document.querySelector('#replay-details').innerHTML = replayDetails(incident,investigateCase(incident));
     if (assistantWindow.open) assistantWindow.close();
   }
 });
 document.addEventListener('change',event=>{
+  if (event.target.id==='report-company') {
+    reportCompany=event.target.value ? event.target.value.slice('company:'.length) : null;
+    render();
+    document.querySelector('#report-company')?.focus({preventScroll:true});
+    return;
+  }
+  if (event.target.id==='report-samples') {
+    includeSampleReports=event.target.checked;
+    render();
+    document.querySelector('#report-samples')?.focus({preventScroll:true});
+    return;
+  }
+  if (event.target.matches('[data-resolution-template]')) {
+    const form = event.target.form;
+    const incident = byId(form.dataset.resolutionForm);
+    const previous = investigateCase(incident,'23:59').exact.find(record=>record.id===event.target.value);
+    if (previous) {
+      form.elements.cause.value = previous.cause || '';
+      form.elements.fix.value = previous.fix || '';
+      form.elements.verification.value = '';
+      if (documents.some(item=>item.id===previous.runbook && item.service===incident.service)) {
+        form.elements.runbook.value = previous.runbook;
+      } else {
+        form.elements.runbook.value = documents.find(item=>item.incident===previous.id)?.id || '';
+      }
+      form.querySelector('[data-resolution-feedback]').textContent = 'Prior cause and fix copied for review. Enter what verified recovery this time.';
+    }
+    return;
+  }
   if (event.target.name==='trigger' && event.target.form?.id==='simulation-form') {
     const scheduled = event.target.value==='scheduled';
     const label = event.target.form.querySelector('[data-scheduled-field]');
@@ -2110,5 +2832,15 @@ window.addEventListener('focus',refreshAutomaticIndicator);
 refreshAutomaticIndicator();
 tick();
 setInterval(tick,500);
-if (location.protocol.startsWith('http')) fetch('/api/status').then(response=>response.json()).then(status=>{ connected=status.gemini; }).catch(()=>{});
+if (checkingGemini) {
+  fetch('/api/status',{signal:AbortSignal.timeout(5000)})
+    .then(response=>response.json())
+    .then(status=>{connected = status.gemini===true;})
+    .catch(()=>{})
+    .finally(()=>{
+      checkingGemini = false;
+      render();
+      void runNextAnalysis();
+    });
+}
 render();

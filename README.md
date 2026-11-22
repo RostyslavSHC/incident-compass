@@ -20,15 +20,29 @@ Use `npm start` to launch the server, `npm run check` to check the source syntax
 
 Open **Incident simulator** from the workspace menu. Choose a template to edit it, use **Run now** for a single incident, or choose **Run all four severities** to demonstrate incoming alerts. To create your own event, fill in the form, preview the incident, and confirm. Schedule a trigger in the device’s local time. Incident timestamps in the workspace display Eastern Time.
 
+Under **Challenge 4 alert feed**, send a repeat alert, a release-related alert, or an unfamiliar alert. Each one opens an automatic Desk brief and creates an in-app notification. These samples use the fictional November 20 monitoring timeline. For a custom alert, include its error code in the description. The Desk checks the sample archive for the same service and code, and checks sample changes in the two hours leading up to the incident timestamp.
+
 On the Desk, acknowledge the incident, update its status and severity, and resolve it with a recovery note. The queue and active counts update, and resolved test incidents appear in History. Find upcoming events in the simulator or Calendar. Use **Notifications** for unread activity, notification history, and the sound toggle.
+
+In **Resolve**, you can copy a matching previous fix or enter your own notes and choose **Format notes with Gemini**. Review the confirmed cause, applied fix and recovery verification before saving. New alerts with the same service and error signature can retrieve that reviewed fix from this browser workspace. **Runbooks** shows the last recorded verification and flags known version differences. **Compare** explains each archive match and **Family tree** opens related alerts, changes, fixes and procedures.
+
+New test alerts with the same error code group when they occur within five minutes on the same service or a known dependency. The primary incident keeps the grouped source alerts, and a higher-severity alert records the reason for promotion.
+
+Open **Reports** for weekly, monthly, and yearly activity in Eastern Time. The page shows openings, resolutions, average alert-to-fix time, and responder work time when the same person accepted and completed the task. Turn off **Include demo history** to see recorded workspace activity only. On the incident Brief, use the duration slider and editable assumptions to explore estimated financial exposure in CAD.
+
+Filter Reports by company to see its incident volumes, repeat signatures, and resolution channels. The two donut charts visualize company openings and resolution channels. A repeat is the same company, service and error code on separate incidents in the selected period. Gemini analyzes the selected report automatically using aggregate counts and error codes. Enter the fictional company in the simulator when creating a custom alert. Older alerts without company metadata appear as **Unassigned**.
+
+After accepting or claiming a routed Telegram task, the responder can tap **Mark fixed** to record their completion. The Desk syncs the timing. You can then add a reviewed resolution with **Resolve**, or save the website report first to close the accepted Telegram route. Telegram setup uses the existing bot and paired destinations.
 
 The browser profile stores custom test events. Keep the workspace open to fire a scheduled test on time. An overdue test fires when the workspace next opens. When Telegram automation is enabled, custom incidents route as soon as they fire. Telegram labels them **TEST EVENT**. **Reset custom simulations** clears the local test events and their in-app notifications after confirmation.
 
-Run `node --test test/simulations.test.mjs` to check severity templates, validation, scheduling, the status lifecycle, and evidence handling.
+Run `node --test test/simulations.test.mjs` to check severity templates, validation, scheduling, the status lifecycle, and automatic evidence matching.
 
 ## Enable Gemini
 
 Use [Google AI Studio](https://aistudio.google.com/apikey) to create a Gemini API key in your own free-tier project. Copy `.env.example` to `.env`, enter the key privately, and restart the server. The API key stays on the local server. When the key or API is unavailable, the assistant uses labeled, record-based demo answers.
+
+When an alert fires, the Desk shows the evidence-linked brief immediately and requests a Gemini analysis in the background. The AI analysis cites sample records, explains the main uncertainty, and suggests a first check. The browser saves the analysis for that incident. Use fictional descriptions in the simulator because the alert and its evidence are sent to Gemini. **Ask assistant** is available for follow-up questions and voice interaction.
 
 The microphone uses browser dictation where available, subject to the browser's microphone permission and speech service. The assistant also accepts typed questions and can read a response aloud.
 

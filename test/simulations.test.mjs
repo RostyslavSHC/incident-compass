@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {investigate, scenarios, services} from '../public/data.mjs';
+import {documents, groupDuplicate, investigate, runbookFreshness, sampleMonitoringTime, scenarios, services} from '../public/data.mjs';
 import {
-  asInvestigation, createSimulation, releaseSimulation, simulationTemplates,
-  updateSimulation, validateSimulation,
+  asInvestigation, createSimulation, investigationTemplates, releaseSimulation, simulationTemplates,
+  updateSimulation, validateReviewedResolution, validateSimulation,
 } from '../public/simulations.mjs';
 
 const now = Date.parse('2026-11-21T15:00:00Z');
@@ -50,7 +50,7 @@ test('acknowledgement, status changes, and recovery preserve responder history',
 });
 
 test('test reports provide synthetic evidence without claiming a historical fix',()=>{
-  const record = createSimulation(normalized({service:'Identity Gateway'}),'Maya Chen',now,'SIM-EVIDENCE');
+  const record = createSimulation(normalized({service:'Identity Gateway',company:''}),'Maya Chen',now,'SIM-EVIDENCE');
   releaseSimulation(record,now);
   const adapted = asInvestigation(record);
   const report = investigate(adapted);
@@ -60,4 +60,88 @@ test('test reports provide synthetic evidence without claiming a historical fix'
   assert.equal(report.known,undefined);
   assert.equal(report.evidence[0].detail,record.description);
   assert.ok(investigate(scenarios.find(incident=>incident.id==='INC-122')).verifiedDocument);
+});
+
+function incomingAlert({occurredAt,...input},fire = true) {
+  const record = createSimulation(normalized({...input,occurred:new Date(occurredAt).toISOString()}),'Sam Rivera',now,'SIM-LOOKUP');
+  if (fire) releaseSimulation(record,now);
+  return asInvestigation(record);
+}
+
+test('a fresh repeat alert retrieves the documented fix and linked runbook',()=>{
+  const alert = incomingAlert({...investigationTemplates[0],title:'Different alert title',description:'Auth failed: jwks_cache_miss.'});
+  const result = investigate(alert);
+  assert.equal(alert.fingerprint,'JWKS_CACHE_MISS');
+  assert.deepEqual(result.exact.map(record=>record.id),['INC-104']);
+  assert.equal(result.verifiedDocument.id,'RB-008');
+  assert.match(result.known.fix,/signing-key cache/);
+  assert.ok(result.causeSources.includes('LOG-44'));
+});
+
+test('a release is a likely cause only when the same service and version have corroborating error evidence',()=>{
+  const template = investigationTemplates[1];
+  const result = investigate(incomingAlert(template));
+  assert.match(result.cause,/recent release 2\.8\.0 is the leading cause/);
+  assert.deepEqual(result.causeSources,['CHG-78','LOG-41']);
+  assert.equal(result.guide.id,'RB-013');
+  assert.equal(result.known,undefined);
+
+  const beforeLog = investigate(incomingAlert({...template,occurredAt:sampleMonitoringTime('10:01')}));
+  assert.deepEqual(beforeLog.changes.map(change=>change.id),['CHG-78']);
+  assert.match(beforeLog.cause,/does not establish/);
+  const wrongError = investigate(incomingAlert({...template,description:'New error: PAY_UNKNOWN_FAILURE'}));
+  assert.match(wrongError.cause,/does not establish/);
+  const otherService = investigate(incomingAlert({...template,service:'Checkout'}));
+  assert.equal(otherService.changes.length,0);
+  assert.match(otherService.cause,/does not establish/);
+});
+
+test('a new error shows recent changes without borrowing a fix from the same service',()=>{
+  const template = investigationTemplates[2];
+  const alert = incomingAlert(template);
+  const result = investigate(alert);
+  assert.deepEqual(result.changes.map(change=>change.id),['CHG-82','CHG-83']);
+  assert.deepEqual(result.nearby.map(record=>record.id),['INC-087']);
+  assert.equal(result.known,undefined);
+  assert.equal(result.guide.id,'DG-023');
+  assert.match(result.cause,/does not establish/);
+  assert.equal(investigate(alert,sampleMonitoringTime('10:11')).observed,false);
+  assert.equal(investigate(incomingAlert(template,false)).observed,false);
+  const later = investigate(incomingAlert({...template,occurredAt:now}));
+  assert.equal(later.changes.length,0);
+});
+
+test('a reviewed fix is reusable for a later matching alert and checked against the service version',()=>{
+  const alert = incomingAlert({...investigationTemplates[2],serviceVersion:'4.2.0'});
+  const reviewed = validateReviewedResolution({cause:'Import held an inventory lock.',fix:'Moved the import to a separate window.',
+    verification:'Commit latency returned to baseline.',version:'4.2.0',runbook:'DG-023'});
+  const archive = [{...reviewed,id:'SIM-VERIFIED',title:'Prior write stall',service:alert.service,company:alert.company,fingerprint:alert.fingerprint,
+    responder:'Alex Morgan',resolvedAt:now-5_000}];
+  const result = investigate(alert,'23:59',archive);
+  assert.equal(result.known.id,'SIM-VERIFIED');
+  assert.equal(result.verify,reviewed.verification);
+  assert.equal(investigate({...alert,serviceVersion:'4.3.0'},'23:59',archive).known,undefined);
+  assert.ok(investigate({...alert,serviceVersion:'4.3.0'},'23:59',archive).comparisons[0].reasons.some(reason=>reason.includes('differs')));
+  assert.equal(investigate(alert,alert.occurredAt,archive).known,undefined);
+  assert.equal(investigate({...alert,company:'Another sample company'},'23:59',archive).known,undefined);
+  assert.throws(()=>validateReviewedResolution({cause:reviewed.cause,fix:reviewed.fix}),/recovery verification/);
+});
+
+test('duplicate matching requires the same error, a shared service path and a nearby timestamp',()=>{
+  const original = {id:'SIM-ROOT',service:'Payments API',fingerprint:'PAY_AUTH_TIMEOUT',occurredAt:now};
+  const downstream = {id:'SIM-SECOND',service:'Checkout',fingerprint:original.fingerprint,occurredAt:now+60_000};
+  assert.equal(groupDuplicate(downstream,[original]),original);
+  assert.equal(groupDuplicate({...downstream,service:'Reporting'},[original]),undefined);
+  assert.equal(groupDuplicate({...downstream,company:'Another sample company'},[original]),undefined);
+  assert.equal(groupDuplicate({...downstream,fingerprint:null},[original]),undefined);
+  assert.equal(groupDuplicate({...downstream,occurredAt:now+360_000},[original]),undefined);
+});
+
+test('runbook freshness reports a version difference and adopts newly reviewed use',()=>{
+  const guide = documents.find(document=>document.id==='RB-008');
+  const before = runbookFreshness(guide,[],'2.4.2',now);
+  assert.ok(before.reasons.some(reason=>reason.includes('differs')));
+  const after = runbookFreshness(guide,[{runbook:guide.id,resolvedAt:now-10_000,responder:'Priya Shah',version:'2.4.2'}],'2.4.2',now);
+  assert.equal(after.check.reviewer,'Priya Shah');
+  assert.deepEqual(after.reasons,[]);
 });

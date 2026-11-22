@@ -1,11 +1,12 @@
 import {randomUUID} from 'node:crypto';
 import {readFile,writeFile,rename,rm} from 'node:fs/promises';
-import {scenarios,services} from './public/data.mjs';
+import {companyLabel,extractErrorSignature,sampleCompanyFor,scenarios,services} from './public/data.mjs';
 import {simulationSeverities,simulationStatuses} from './public/simulations.mjs';
 
 const routePath = new URL('./.telegram-routing.local.json',import.meta.url);
 const presentations = {P1:['🚨','CRITICAL'],P2:['🟠','HIGH'],P3:['🔵','MONITOR']};
 const liveStages = new Set(['queued-private','sending-private','waiting','queued-team','sending-team','open-team']);
+const openRoute = route=>liveStages.has(route.stage) || route.stage==='accepted' && Boolean(route.acceptedAt);
 const secondsAllowed = new Set([30,60,120,300]);
 const escape = value=>String(value).replace(/[&<>]/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[character]));
 const plain = value=>value.replace(/<\/?b>|<\/?code>/g,'').replace(/&(?:lt|gt|amp);/g,entity=>({'&lt;':'<','&gt;':'>','&amp;':'&'}[entity]));
@@ -64,7 +65,7 @@ function renderTestNotice(id,level,input) {
     '🧪 <b>TEST EVENT · A U R E L I S</b>',
     `<b>${level} · ${simulationSeverities[level]}</b> · ${simulationStatuses[input.status]}`,
     `<b>${escape(title)}</b>`,
-    `<code>${escape(id)}</code> · ${escape(input.service)}`,
+    `<code>${escape(id)}</code> · ${escape(input.service)}${companyLabel(input.company) ? ' · '+escape(companyLabel(input.company)) : ''}`,
     '',
     escape(description),
     actions ? `\n🔎 <b>Recommended test action</b>\n${escape(actions)}` : '',
@@ -87,8 +88,16 @@ async function save(state) {
 }
 
 function summarize(entry) {
-  const {id,incident,level,stage,created,deadline,reason,acceptedBy,notice}=entry;
-  return {id,incident,level,stage,created,deadline,reason,acceptedBy,notice,test:Boolean(entry.testMarkup),owner:entry.owner?.label,team:entry.team?.label};
+  const {id,incident,level,stage,created,deadline,reason,acceptedBy,acceptedAt,completedAt,completedBy,completedVia,notice}=entry;
+  return {id,incident,level,stage,created,deadline,reason,acceptedBy,acceptedAt,completedAt,completedBy,completedVia,notice,test:Boolean(entry.testMarkup),owner:entry.owner?.label,team:entry.team?.label};
+}
+
+function reportEvent(route) {
+  const {id,incident,level,created,acceptedAt,acceptedBy,completedAt,completedBy,completedVia,stage}=route;
+  const scenario=scenarios.find(item=>item.id===incident);
+  return {id,incident,level,created,acceptedAt,acceptedBy,completedAt,completedBy,completedVia,stage,
+    title:route.title || scenario?.title || incident,service:route.service || scenario?.service || 'Test service',
+    company:route.company || (scenario ? sampleCompanyFor(scenario.service) : ''),fingerprint:route.fingerprint || scenario?.fingerprint};
 }
 
 export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now}) {
@@ -213,7 +222,10 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     for(const [id,entry] of notices)if(entry.expires<=now())notices.delete(id);
     if(notices.size>=40)return {error:'Too many notice previews. Try again shortly.'};
     const token=randomUUID();
-    const route = {incident:input.incident,level,wait,testMarkup:incident?undefined:message.markup};
+    const route = {incident:input.incident,level,wait,testMarkup:incident?undefined:message.markup,
+      title:incident?.title || input.simulation.title.trim(),service:incident?.service || input.simulation.service,
+      company:incident ? sampleCompanyFor(incident.service) : companyLabel(input.simulation.company),
+      fingerprint:incident?.fingerprint || extractErrorSignature(input.simulation?.title,input.simulation?.description)};
     notices.set(token,{...route,recipient:input.recipient,chat:target.chat,team,bot:botId(config.token),message,expires:now()+5*60_000});
     return {token,incident:input.incident,level,text:group?message.text:renderRoute(route,'private').text,test:!incident,
       label:target.label,destination:masked(target.chat),group,wait:group?undefined:wait,team:group?undefined:team.label};
@@ -229,7 +241,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
       if(target.group!==true){
         const {team}=targets(state,config);
         if(!team||team.chat!==notice.team?.chat)return {error:'The team group changed. Review a new preview.'};
-        const active=state.routes.find(route=>route.bot===notice.bot&&route.incident===notice.incident&&liveStages.has(route.stage));
+        const active=state.routes.find(route=>route.bot===notice.bot&&route.incident===notice.incident&&openRoute(route));
         if(active){
           if(active.owner?.chat!==target.chat||active.reason==='critical')return {error:'This incident already has an active Telegram route. Open it in Telegram routing to see who is handling it.'};
           notices.delete(input.token);
@@ -262,7 +274,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
       const {team,people}=targets(state,config);
       if(entry.bot!==botId(config.token)||team?.chat!==entry.team.chat||
         (entry.level!=='P1'&&!people.some(person=>person.id===entry.owner.id&&person.chat===entry.owner.chat)))return {error:'The routing destinations changed. Review a new preview.'};
-      if(state.routes.some(route=>route.bot===entry.bot&&route.incident===entry.incident&&liveStages.has(route.stage)))return {error:'This incident already has an active Telegram route.'};
+      if(state.routes.some(route=>route.bot===entry.bot&&route.incident===entry.incident&&openRoute(route)))return {error:'This incident already has an active Telegram route.'};
       const hook=await call(config.token,'getWebhookInfo');
       if(!hook.ok || hook.result?.url)return {error:'This bot must be reachable and available for polling. Use a dedicated bot without an active webhook.'};
       const route=await queueRoute(state,entry);
@@ -273,10 +285,16 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
   async function queueRoute(state,entry) {
     const direct = entry.direct ?? entry.level==='P1';
     const route={id:randomUUID(),bot:entry.bot,incident:entry.incident,level:entry.level,wait:entry.wait,
-      testMarkup:entry.testMarkup,owner:entry.owner,team:entry.team,created:now(),event:entry.event,
+      testMarkup:entry.testMarkup,title:entry.title,service:entry.service,company:entry.company,fingerprint:entry.fingerprint,
+      owner:entry.owner,team:entry.team,created:now(),event:entry.event,
       stage:direct?'queued-team':'queued-private',reason:direct?'critical':null};
     state.routes.unshift(route);
-    state.routes=[...state.routes.filter(item=>liveStages.has(item.stage)),...state.routes.filter(item=>!liveStages.has(item.stage)).slice(0,45)].sort((a,b)=>b.created-a.created);
+    const finished=state.routes.filter(item=>!openRoute(item) && !item.completionEditAt);
+    if(finished.length>45) {
+      state.reportArchive ||= [];
+      state.reportArchive.push(...finished.slice(45).map(reportEvent));
+    }
+    state.routes=[...state.routes.filter(openRoute),...finished.slice(0,45)].sort((a,b)=>b.created-a.created);
     await save(state);
     return route;
   }
@@ -316,13 +334,16 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
       const state=await load();
       const id=botId(config.token);
       const {team,people,auto}=targets(state,config);
-      const active=state.routes.find(route=>route.bot===id&&(route.event===input.event||(route.incident===input.incident&&liveStages.has(route.stage))));
+      const active=state.routes.find(route=>route.bot===id&&(route.event===input.event||(route.incident===input.incident&&openRoute(route))));
       if(active)return {status:'duplicate',route:summarize(active)};
       if(!auto.enabled)return {status:'disabled'};
       if(auto.owner==='default') await resolveOwnerProfile(state,config);
       const owner=(auto.owner==='default'?targets(state,config).people:people).find(person=>person.id===auto.owner);
       if(!config.token||!team||(level!=='P1'&&!owner))return {error:'Automatic Telegram delivery needs its group and responder configured.'};
-      const route=await queueRoute(state,{bot:id,incident:input.incident,level,wait:auto.wait,owner,team,event:input.event,testMarkup:test?.markup});
+      const route=await queueRoute(state,{bot:id,incident:input.incident,level,wait:auto.wait,owner,team,event:input.event,
+        testMarkup:test?.markup,title:test ? input.simulation.title.trim() : undefined,service:test ? input.simulation.service : undefined,
+        company:test ? companyLabel(input.simulation.company) : undefined,
+        fingerprint:test ? extractErrorSignature(input.simulation.title,input.simulation.description) : undefined});
       return {status:'queued',route:summarize(route)};
     });
   }
@@ -372,6 +393,55 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     if(enrollment&&team?.chat===route.team.chat)rows.push([{text:'🔔 Enable private alerts',url:enrollment.url}]);
     return rows;
   }
+  async function reportEvents() {
+    const state=await load();
+    return {events:[...state.routes.map(reportEvent),...(state.reportArchive || [])]};
+  }
+  async function finishRoute(state,route,who,via,time) {
+    markCompleted(route,who,via,time);
+    await save(state);
+  }
+
+  function markCompleted(route,who,via,time) {
+    Object.assign(route,{stage:'completed',completedAt:time,completedBy:who,completedVia:via});
+    if (route.acceptedMessage || route.teamMessage || route.privateMessage) route.completionEditAt=now();
+  }
+
+  async function showCompleted(state,route,token) {
+    const chat=route.acceptedChat || (route.teamMessage ? route.team.chat : route.owner.chat);
+    const message=route.acceptedMessage || route.teamMessage || route.privateMessage;
+    const inTeam=chat===route.team?.chat;
+    const minutes=route.acceptedAt && route.acceptedAt<=route.completedAt
+      ? Math.round((route.completedAt-route.acceptedAt)/60_000) : null;
+    const elapsed=minutes===null ? '' : minutes===0 ? ' · under 1 min from acceptance' : ` · ${minutes} min from acceptance`;
+    const source=route.completedVia==='website' ? ' · saved on the website' : '';
+    const result=await call(token,'editMessageText',{chat_id:chat,message_id:message,
+      text:renderRoute(route,'notice').markup+`\n\n✅ <b>Fixed by ${escape(route.completedBy)}</b>${source}${elapsed}`,parse_mode:'HTML',
+      reply_markup:{inline_keyboard:inTeam?teamButtons(state,route,false):[]}});
+    if (result.ok || (result.http>=400 && result.http<500 && result.http!==429)) delete route.completionEditAt;
+    else route.completionEditAt=now()+Math.max(15, result.retryAfter || 0)*1000;
+    await save(state);
+  }
+  async function completeFromWeb(input) {
+    return exclusive(async()=>{
+      const {incident,openedAt,completedAt,who}=input;
+      if (typeof incident!=='string' || !/^(?:INC-\d+|SIM-[\dA-F]{8,12})$/.test(incident) ||
+          !Number.isSafeInteger(openedAt) || !Number.isSafeInteger(completedAt) ||
+          openedAt<0 || completedAt<openedAt || completedAt>now()+60_000 ||
+          typeof who!=='string' || !who.trim() || who.length>120) return {error:'Invalid completion record.'};
+      const config=await connect();
+      if (!config.token) return {updated:false};
+      const state=await load();
+      const matches=state.routes.filter(item=>item.bot===botId(config.token) && item.incident===incident &&
+        item.created>=openedAt && item.created<=completedAt &&
+        (liveStages.has(item.stage) || item.stage==='accepted' ||
+          (item.completedVia==='telegram' && item.completedAt>=completedAt)));
+      if (!matches.length) return {updated:false};
+      for (const route of matches) markCompleted(route,who.trim(),'website',completedAt);
+      await save(state);
+      return {updated:true,route:reportEvent(matches[0])};
+    });
+  }
   async function acceptUpdate(state,token,update) {
     const bot=botId(token);
     const callback=update.callback_query;
@@ -385,6 +455,17 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
       if(prefix==='ic'&&callback?.id) await call(token,'answerCallbackQuery',{callback_query_id:callback.id,text:'This page is no longer active.'});
       return;
     }
+    if (callback && action==='complete') {
+      const allowed=(route.stage==='accepted' || route.stage==='completed') &&
+        route.acceptedChat===id && route.acceptedMessage===message?.message_id &&
+        route.acceptedUser===String(user?.id) && !user?.is_bot;
+      const newlyCompleted=allowed && route.stage==='accepted';
+      if (newlyCompleted) await finishRoute(state,route,responderName(user),'telegram',Math.max(now(),route.acceptedAt));
+      await call(token,'answerCallbackQuery',{callback_query_id:callback.id,
+        ...(newlyCompleted ? {text:'Completion time saved.'} : allowed ? {} :
+          {text:'Only the responder who accepted this task can mark it fixed.'})});
+      return;
+    }
     const inPrivate=id===route.owner?.chat&&String(user?.id)===id&&route.stage==='waiting'&&
       (!callback||message.message_id===route.privateMessage);
     const inTeam=id===route.team.chat&&route.stage==='open-team'&&message?.message_id===route.teamMessage&&action==='claim'&&user?.id&&!user.is_bot;
@@ -394,13 +475,17 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     const decline=withinWindow&&(action==='decline'||(!callback&&/^(decline|reject|busy|no|unavailable)\b/i.test(reply)));
     const accept=inTeam||(withinWindow&&(action==='accept'||(!callback&&reply&&!decline)));
     if(decline){route.stage='queued-team';route.reason='decline';}
-    if(accept){route.stage='accepted';route.acceptedBy=responderName(user);}
+    if(accept) Object.assign(route,{stage:'accepted',acceptedBy:responderName(user),
+      acceptedAt:Math.max(route.created,responseTime),acceptedUser:String(user.id),acceptedChat:id,
+      acceptedMessage:callback ? message.message_id : route.privateMessage});
     if(decline||accept)await save(state);
     if(callback?.id)await call(token,'answerCallbackQuery',{callback_query_id:callback.id,text:accept?'Ownership recorded.':decline?'Escalating to the team.':'This page is no longer available to claim.'});
     if(decline||accept) {
       const previous=renderRoute(route,inTeam?route.reason:'private',route.deadline).markup;
       const status=accept?`✅ <b>Accepted by ${escape(route.acceptedBy)}</b>`:'↪ <b>Declined · Escalating to the team</b>';
-      await call(token,'editMessageText',{chat_id:id,message_id:callback?message.message_id:route.privateMessage,text:previous+'\n\n'+status,parse_mode:'HTML',reply_markup:{inline_keyboard:inTeam?teamButtons(state,route,false):[]}});
+      const buttons=inTeam?teamButtons(state,route,false):[];
+      if (accept) buttons.unshift([{text:'✅ Mark fixed',style:'success',callback_data:`ic:${route.id}:complete`}]);
+      await call(token,'editMessageText',{chat_id:id,message_id:callback?message.message_id:route.privateMessage,text:previous+'\n\n'+status,parse_mode:'HTML',reply_markup:{inline_keyboard:buttons}});
     }
   }
   async function send(state,route,token,toTeam) {
@@ -442,10 +527,11 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
       if(!config.token)return;
       const id=botId(config.token);
       const state=await load();
-      const outstanding=state.routes.filter(route=>route.bot===id&&liveStages.has(route.stage));
+      const outstanding=state.routes.filter(route=>route.bot===id&&openRoute(route));
+      const cardUpdate=state.routes.find(route=>route.bot===id && route.completionEditAt<=now());
       const enrolling=Boolean(state.connections[id]?.enrollment);
-      if(!outstanding.length&&!enrolling)return;
-      if(enrolling||outstanding.some(route=>['waiting','open-team'].includes(route.stage))){
+      if(!outstanding.length&&!cardUpdate&&!enrolling)return;
+      if(enrolling||cardUpdate||outstanding.some(route=>['waiting','open-team','accepted'].includes(route.stage))){
         const data=await call(config.token,'getUpdates',{offset:state.offsets[id] || 0,timeout:0,limit:50,allowed_updates:['message','callback_query']});
         if(data.ok&&Array.isArray(data.result)){
           onUpdates(config.token,data.result);
@@ -469,7 +555,9 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
         if(route.stage==='queued-private'){await send(state,route,config.token,false);await save(state);}
         if(route.stage==='queued-team'){await send(state,route,config.token,true);await save(state);}
       }
+      const completedCard=cardUpdate || outstanding.find(route=>route.completionEditAt<=now());
+      if(completedCard)await showCompleted(state,completedCard,config.token);
     });}finally {running=false;}
   }
-  return {list,register,preview,start,previewNotice,sendNotice,configureAuto,recordAlert,enableEnrollment,step};
+  return {list,register,preview,start,previewNotice,sendNotice,configureAuto,recordAlert,enableEnrollment,reportEvents,completeFromWeb,step};
 }

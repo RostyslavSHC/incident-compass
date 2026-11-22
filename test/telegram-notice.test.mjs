@@ -25,6 +25,8 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
   const sent = [];
   const edits = [];
   const updates = [];
+  const answers = [];
+  let editFailure = false;
   let clock = Date.parse('2026-11-21T20:00:00Z');
   let updateId = 0;
   const owner = '100004322';
@@ -36,8 +38,12 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
       if (method==='getChatMember') return {ok:true,result:{status:'member'}};
       if (method==='getWebhookInfo') return {ok:true,result:{url:''}};
       if (method==='getUpdates') return {ok:true,result:updates.splice(0)};
-      if (method==='answerCallbackQuery') return {ok:true};
+      if (method==='answerCallbackQuery') {
+        answers.push(body);
+        return {ok:true};
+      }
       if (method==='editMessageText') {
+        if (editFailure) return {ok:false,http:429,retryAfter:20};
         edits.push(body);
         return {ok:true};
       }
@@ -55,7 +61,7 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
     const button = message.reply_markup.inline_keyboard.flat().find(item=>item.callback_data?.endsWith(':'+action));
     assert.ok(button);
     updates.push({update_id:++updateId,callback_query:{id:String(updateId),data:button.callback_data,
-      from:{id:Number(user),first_name:'Example responder'},message:{chat:{id:Number(message.chat_id)},message_id:sent.indexOf(message)+1}
+      from:{id:Number(user),first_name:'Example responder'},message:{chat:{id:Number(message.chat_id)},message_id:message.message_id || sent.indexOf(message)+1}
     }});
   };
   const input = {
@@ -94,6 +100,24 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
   await router.step();
   assert.equal((await router.list()).routes.find(route=>route.id===privatePage.route.id).stage,'accepted');
   assert.match(edits.at(-1).text,/Accepted by Example responder/);
+  const acceptedMessage=edits.at(-1);
+  const start=clock;
+  clock+=120_000;
+  callback(acceptedMessage,'complete',owner);
+  await router.step();
+  assert.equal((await router.list()).routes.find(route=>route.id===privatePage.route.id).stage,'accepted');
+  callback(acceptedMessage,'complete',person.chat);
+  await router.step();
+  let completed=(await router.reportEvents()).events.find(route=>route.id===privatePage.route.id);
+  assert.equal(completed.acceptedAt,start);
+  assert.equal(completed.completedAt,start+120_000);
+  assert.equal(completed.completedVia,'telegram');
+  assert.match(edits.at(-1).text,/2 min from acceptance/);
+  clock+=60_000;
+  callback(acceptedMessage,'complete',person.chat);
+  await router.step();
+  completed=(await router.reportEvents()).events.find(route=>route.id===privatePage.route.id);
+  assert.equal(completed.completedAt,start+120_000);
   assert.ok((await router.previewNotice({...input,recipient:'team',simulation:undefined})).error);
   const prepared = await router.previewNotice({incident:'INC-124',level:'P3',recipient:'team'});
   assert.equal(prepared.test,false);
@@ -115,6 +139,44 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
     callback(escalation,'claim',owner);
     await router.step();
     assert.equal((await router.list()).routes.find(route=>route.id===page.route.id).stage,'accepted');
+    const acceptedCard=edits.at(-1);
+    clock+=180_000;
+    const fix={incident:page.route.incident,openedAt:page.route.created,completedAt:clock,who:'Website reviewer'};
+    const completion=await router.completeFromWeb(fix);
+    assert.equal(completion.route.completedVia,'website');
+    assert.equal(completion.route.completedAt-completion.route.acceptedAt,180_000);
+    const before=sent.length;
+    editFailure=true;
+    callback(acceptedCard,'complete',owner);
+    await router.step();
+    assert.equal(answers.at(-1).text,undefined);
+    assert.equal(edits.at(-1),acceptedCard);
+    editFailure=false;
+    clock+=19_999;
+    await router.step();
+    assert.equal(edits.at(-1),acceptedCard);
+    clock++;
+    await router.step();
+    assert.match(edits.at(-1).text,/Fixed by Website reviewer.*saved on the website/);
+    assert.deepEqual(edits.at(-1).reply_markup.inline_keyboard,[]);
+    assert.equal(sent.length,before);
+    assert.deepEqual((await router.reportEvents()).events.find(route=>route.id===page.route.id),completion.route);
+    assert.equal((await router.completeFromWeb(fix)).updated,false);
+  });
+  await t.test('website resolution closes unclaimed Telegram pages and prevents escalation',async()=>{
+    const page=await record('SIM-A4444444','P3');
+    await router.step();
+    const message=sent.at(-1);
+    const before=sent.length;
+    clock+=5_000;
+    assert.equal((await router.completeFromWeb({incident:page.route.incident,openedAt:page.route.created,
+      completedAt:clock,who:'Website reviewer'})).route.stage,'completed');
+    clock+=30_000;
+    await router.step();
+    assert.equal(sent.length,before);
+    assert.equal(edits.at(-1).message_id,sent.indexOf(message)+1);
+    assert.match(edits.at(-1).text,/Fixed by Website reviewer/);
+    assert.deepEqual(edits.at(-1).reply_markup.inline_keyboard,[]);
   });
   await t.test('no reply by the deadline escalates and removes the private actions',async()=>{
     await record('SIM-A2222222','P3');

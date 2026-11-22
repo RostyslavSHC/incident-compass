@@ -169,7 +169,8 @@ export function createAlertApi({port,json,request = fetch}) {
   }
   const call=async (token,method,body)=>{
     const response=await providerJson(request,telegramUrl(token,method),body?telegramBody(body):{});
-    return {ok:response.ok&&response.data?.ok===true,result:response.data?.result,http:response.http};
+    return {ok:response.ok&&response.data?.ok===true,result:response.data?.result,http:response.http,
+      retryAfter:response.data?.parameters?.retry_after};
   };
   const telegram=createTelegramRouter({
     connect:async()=>{
@@ -188,6 +189,7 @@ export function createAlertApi({port,json,request = fetch}) {
       return json(res,200,{channels:channelStatus(await loadConfig()),deliveries:deliveries.slice(0,20)});
     }
     if (path==='/api/alerts/telegram-routing' && req.method==='GET') return json(res,200,await telegram.list());
+    if (path==='/api/alerts/telegram-report-events' && req.method==='GET') return json(res,200,await telegram.reportEvents());
     if (req.method!=='POST' || req.headers.origin!==origin || req.headers['content-type']?.split(';',1)[0].trim()!=='application/json') {
       return json(res,403,{error:'Use the local Aurelis dashboard.'});
     }
@@ -220,6 +222,10 @@ export function createAlertApi({port,json,request = fetch}) {
     if (path==='/api/alerts/telegram-alert-event') {
       const result=await telegram.recordAlert(input);
       return json(res,result.error?409:202,result);
+    }
+    if (path==='/api/alerts/telegram-complete') {
+      const result=await telegram.completeFromWeb(input);
+      return json(res,result.error?400:200,result);
     }
     if (path==='/api/alerts/telegram-enrollment') {
       const result=await telegram.enableEnrollment(input);

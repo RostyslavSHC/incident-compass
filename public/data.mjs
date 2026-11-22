@@ -13,6 +13,16 @@ export const services = [
   ['Object Storage', 'Data'], ['Backups', 'Data'], ['Billing Reports', 'Operations'],
 ].map(([name, group]) => ({name, group}));
 
+const sampleCompanyGroups = {
+  Commerce:'Cedar Market',Identity:'Northstar Labs',Data:'Overlook Supply',
+  Operations:'Harborline Services',Edge:'Cedar Market',Platform:'Northstar Labs',
+};
+export const sampleCompanies = [...new Set(Object.values(sampleCompanyGroups))];
+export const sampleCompanyFor = service=>sampleCompanyGroups[services.find(item=>item.name===service)?.group] || '';
+export const companyLabel = company=>typeof company==='string'
+  ? company.normalize('NFKC').trim().replace(/\s+/g,' ').slice(0,80) : '';
+export const companyKey = company=>companyLabel(company).toLowerCase();
+
 export const history = [
   {id:'INC-096', date:'Oct 29', service:'Payments API', fingerprint:'PAY_CONN_RESET', title:'Timeouts after a configuration update', priority:'P2', responder:'Maya Chen', cause:'A checkout timeout was set too low.', fix:'Restored the previously validated timeout and verified checkout success.', runbook:'RB-013 · Validate payment recovery'},
   {id:'INC-104', date:'Nov 06', service:'Identity Gateway', fingerprint:'JWKS_CACHE_MISS', title:'Login errors after key rotation', priority:'P2', responder:'Sam Rivera', cause:'The identity gateway cache held stale signing keys.', fix:'Refreshed the signing-key cache and confirmed successful sign-ins.', runbook:'RB-008 · Refresh identity cache'},
@@ -42,7 +52,7 @@ export const documents = [
   },
   {
     id:'RB-013', title:'Triage payment timeouts after a deployment', service:'Payments API', owner:'Commerce Operations', updated:'Nov 10, 2026',
-    kind:'Conditional recovery runbook', incident:'INC-096',
+    kind:'Conditional recovery runbook', incident:'INC-096', releaseSignature:'PAY_AUTH_TIMEOUT',
     useWhen:'Payment requests start timing out around a release that changed the authorization timeout.',
     stopWhen:'If both versions fail at similar rates during the same provider window, or if provider errors are increasing across unaffected versions, investigate the provider before treating the release as the sole cause.',
     steps:[
@@ -67,7 +77,7 @@ export const documents = [
   },
   {
     id:'DG-023', title:'Diagnose inventory commit stalls', service:'Inventory Database', owner:'Data Platform', updated:'Nov 20, 2026',
-    kind:'Investigation guide',
+    kind:'Investigation guide', signature:'INV_COMMIT_STALL',
     useWhen:'Inventory writes accept a connection but stall during commit, with no matching fix in history.',
     stopWhen:'A recent deployment or scheduled job is a lead. Avoid recommending a change until the affected write path and a measurable cause are established.',
     steps:[
@@ -135,7 +145,7 @@ export const documents = [
 export const scenarios = [
   {
     id:'INC-121', variant:'After a release', service:'Payments API', title:'Checkout payments failing', owner:'Maya Chen', fingerprint:'PAY_AUTH_TIMEOUT', alert:'10:02',
-    affectedPct:38, core:true, confirmed:['Payments API','Checkout'], possible:['Order confirmation'], document:'RB-013',
+    affectedPct:38, core:true, confirmed:['Payments API','Checkout'], possible:['Order confirmation'], document:'RB-013', serviceVersion:'2.8.0',
     findings:[
       {text:'The error rate rose from a 0.4% authorization baseline to 38% checkout failures after a release changed the authorization timeout from 3 s to 1 s.', ids:['MET-21','CHG-78','ALT-23']},
       {text:'Failures concentrate on v2.8.0 at the new 1 s cutoff. That makes the release a stronger lead than timing alone.', ids:['CHG-78','LOG-41']},
@@ -145,8 +155,8 @@ export const scenarios = [
     money:{low:4,high:7,order:65},
     events:[
       {id:'MET-21', time:'09:43', seen:'09:43', kind:'Metric', title:'Payment baseline', detail:'Authorization errors at 0.4%; checkout success normal.'},
-      {id:'CHG-78', time:'09:54', seen:'09:54', kind:'Change', title:'Payments API v2.8.0 deployed', detail:'The release lowered the authorization timeout from 3 s to 1 s.'},
-      {id:'LOG-41', time:'10:02', seen:'10:02', kind:'Log', title:'PAY_AUTH_TIMEOUT starts', detail:'Failed requests cluster on v2.8.0; most fail at the new 1 s cutoff.'},
+      {id:'CHG-78', time:'09:54', seen:'09:54', kind:'Change', version:'2.8.0', title:'Payments API v2.8.0 deployed', detail:'The release lowered the authorization timeout from 3 s to 1 s.'},
+      {id:'LOG-41', time:'10:02', seen:'10:02', kind:'Log', signature:'PAY_AUTH_TIMEOUT', affectedVersion:'2.8.0', title:'PAY_AUTH_TIMEOUT starts', detail:'Failed requests cluster on v2.8.0; most fail at the new 1 s cutoff.'},
       {id:'ALT-22', time:'10:02', seen:'10:02', kind:'Alert', service:'Payments API', signature:'PAY_AUTH_TIMEOUT', title:'Payment authorization failures rise', detail:'The Payments API monitor reports failures tagged PAY_AUTH_TIMEOUT.'},
       {id:'ALT-23', time:'10:02', seen:'10:02', kind:'Alert', service:'Checkout', signature:'PAY_AUTH_TIMEOUT', title:'Checkout failure rate reaches 38%', detail:'Checkout depends on Payments API. Its failures report the same upstream authorization timeout.'},
       {id:'SUP-16', time:'10:04', seen:'10:04', kind:'Ticket', title:'Customers report payment failures', detail:'Support records 12 checkout reports. Order confirmation impact remains unverified.'},
@@ -159,7 +169,7 @@ export const scenarios = [
   },
   {
     id:'INC-122', variant:'Repeat incident', service:'Identity Gateway', title:'Sign-ins rejected after key rotation', owner:'Sam Rivera', fingerprint:'JWKS_CACHE_MISS', alert:'10:09',
-    affectedPct:9, core:true, confirmed:['Identity Gateway'], possible:['Customer Portal','Session Store'], document:'RB-008',
+    affectedPct:9, core:true, confirmed:['Identity Gateway'], possible:['Customer Portal','Session Store'], document:'RB-008', serviceVersion:'2.4.2',
     findings:[
       {text:'The identity issuer completed scheduled signing-key rotation at 10:00. At 10:08, one node rejected requests signed by the new active key.', ids:['CHG-81','LOG-44']},
       {text:'The monitoring alert recorded 9% sign-in failures at 10:09, concentrated on one node. Compare its cached keys with the keys on a healthy node.', ids:['ALT-25','LOG-44']},
@@ -168,7 +178,7 @@ export const scenarios = [
     unknowns:['Whether the affected node can reach the issuer now.', 'Whether the current cache actually lacks the active key.', 'Whether any downstream portal or session checks failed.'],
     events:[
       {id:'CHG-81', time:'10:00', seen:'10:00', kind:'Change', title:'Signing keys rotated', detail:'Scheduled identity key rotation completed.'},
-      {id:'LOG-44', time:'10:08', seen:'10:08', kind:'Log', title:'JWKS_CACHE_MISS', detail:'A gateway node rejects requests signed with the newly active key.'},
+      {id:'LOG-44', time:'10:08', seen:'10:08', kind:'Log', signature:'JWKS_CACHE_MISS', title:'JWKS_CACHE_MISS', detail:'A gateway node rejects requests signed with the newly active key.'},
       {id:'ALT-25', time:'10:09', seen:'10:09', kind:'Alert', title:'Sign-in error rate reaches 9%', detail:'Failures cluster on one gateway node.'},
     ],
     cause:'A stale signing-key cache is likely on one gateway node.', causeSources:['LOG-44','INC-104'],
@@ -187,7 +197,7 @@ export const scenarios = [
     events:[
       {id:'CHG-82', time:'09:48', seen:'09:48', kind:'Change', title:'Inventory read replica resized', detail:'Capacity changed on the reporting replica.'},
       {id:'CHG-83', time:'10:04', seen:'10:04', kind:'Change', title:'Stock import enabled', detail:'A scheduled inventory write batch started.'},
-      {id:'LOG-48', time:'10:11', seen:'10:11', kind:'Log', title:'INV_COMMIT_STALL', detail:'Some writes stall after accepting a connection. No connection-pool errors are present.'},
+      {id:'LOG-48', time:'10:11', seen:'10:11', kind:'Log', signature:'INV_COMMIT_STALL', title:'INV_COMMIT_STALL', detail:'Some writes stall after accepting a connection. No connection-pool errors are present.'},
       {id:'ALT-27', time:'10:12', seen:'10:12', kind:'Alert', title:'Inventory writes slow down', detail:'5% of stock-update operations exceed the latency threshold.'},
     ],
     cause:'Cause unknown. The sample history has no matching error signature.', causeSources:['LOG-48'],
@@ -218,37 +228,143 @@ export const upcoming = [
   {date:'Nov 25', time:'18:00', kind:'Change', service:'Customer Portal', title:'Scheduled portal release'},
 ];
 
-export function investigate(incident, cutoff = '23:59') {
-  const evidence = incident.events.filter(event => event.seen <= cutoff)
-    .sort((first, second) => first.seen.localeCompare(second.seen));
-  const observed = cutoff >= incident.alert;
-  const nearby = observed ? history.filter(record => record.service === incident.service) : [];
-  const exact = nearby.filter(record => record.fingerprint === incident.fingerprint);
+export const sampleMonitoringDate = '2026-11-20';
+export const sampleMonitoringTime = time => Date.parse(`${sampleMonitoringDate}T${time}:00-05:00`);
+const sampleTelemetry = scenarios.flatMap(({service,events})=>events
+  .filter(event=>event.kind==='Change' || event.kind==='Maintenance' || event.kind==='Log')
+  .map(event=>({...event, service, timeAt:sampleMonitoringTime(event.time), seenAt:sampleMonitoringTime(event.seen)})));
+
+export function extractErrorSignature(title,description) {
+  const codes = [...new Set(`${title} ${description}`.toUpperCase().match(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g) || [])];
+  return codes.length === 1 ? codes[0] : null;
+}
+
+export function sampleAlertContext({title,description,service,occurredAt,company}) {
+  const fingerprint = extractErrorSignature(title,description);
+  const windowStart = occurredAt - 2 * 60 * 60_000;
+  const events = sampleTelemetry.filter(event=>event.service===service && (!companyKey(company) || companyKey(company)===companyKey(sampleCompanyFor(service))) && event.seenAt<=occurredAt &&
+    event.timeAt>=windowStart && (event.kind!=='Log' || event.signature===fingerprint));
+  return {fingerprint,events};
+}
+
+const runbookChecks = {
+  'RB-008':{verifiedAt:Date.parse('2026-11-06T17:00:00Z'),reviewer:'Sam Rivera',version:'2.4.1'},
+  'RB-013':{verifiedAt:Date.parse('2026-10-29T17:00:00Z'),reviewer:'Maya Chen',version:'2.7.4'},
+  'RB-017':{verifiedAt:Date.parse('2026-10-22T17:00:00Z'),reviewer:'Alex Morgan',version:'4.2.0'},
+};
+
+export function runbookFreshness(document, archive, currentVersion, now = Date.now()) {
+  const applied = archive.filter(record=>record.runbook===document.id).sort((a,b)=>b.resolvedAt-a.resolvedAt)[0];
+  const check = applied ? {verifiedAt:applied.resolvedAt,reviewer:applied.responder,version:applied.version} : runbookChecks[document.id];
+  const reasons = [];
+  if (!check) reasons.push('No successful use recorded.');
+  if (!check?.version) reasons.push('Verified service version unknown.');
+  if (check?.version && currentVersion && check.version!==currentVersion) reasons.push(`Current version ${currentVersion} differs from verified version ${check.version}.`);
+  if (check && now-check.verifiedAt>90*86_400_000) reasons.push('Last verified more than 90 days ago.');
+  return {check,reasons};
+}
+
+const upstreamServices = {'Checkout':'Payments API','Order confirmation':'Payments API','Customer Portal':'Identity Gateway','Stock Sync':'Inventory Database'};
+
+export function groupDuplicate(incident,candidates) {
+  if (!incident.fingerprint) return undefined;
+  return candidates.find(candidate=>candidate.id!==incident.id && !candidate.groupedUnder &&
+    companyKey(candidate.company)===companyKey(incident.company) &&
+    candidate.fingerprint===incident.fingerprint &&
+    Math.abs(candidate.occurredAt-incident.occurredAt)<=5*60_000 &&
+    (candidate.service===incident.service || upstreamServices[candidate.service]===incident.service ||
+      upstreamServices[incident.service]===candidate.service));
+}
+
+export function investigate(incident, cutoff = '23:59', archive = []) {
+  const sample = incident.sampleAlert;
+  const evidence = sample
+    ? incident.events.filter(event=>cutoff==='23:59' || event.seenAt<=cutoff).sort((a,b)=>a.seenAt-b.seenAt)
+    : incident.events.filter(event=>event.seen<=cutoff).sort((a,b)=>a.seen.localeCompare(b.seen));
+  const observed = sample ? incident.triggeredAt!==null && (cutoff==='23:59' || cutoff>=incident.occurredAt)
+    : cutoff >= incident.alert;
+  const company = companyKey(incident.company);
+  const learned = cutoff==='23:59' ? archive.filter(record=>record.id!==incident.id && companyKey(record.company)===company &&
+    record.resolvedAt<=(incident.triggeredAt ?? Infinity)).sort((a,b)=>b.resolvedAt-a.resolvedAt) : [];
+  const sampleHistory = company ? history.filter(record=>companyKey(sampleCompanyFor(record.service))===company) : history;
+  const comparable = observed ? [...learned,...sampleHistory].filter(record=>record.service===incident.service ||
+    (incident.fingerprint && record.fingerprint===incident.fingerprint)) : [];
+  const nearby = comparable.filter(record=>record.service===incident.service);
+  const exact = nearby.filter(record=>incident.fingerprint && record.fingerprint===incident.fingerprint);
   const changes = evidence.filter(event => ['Change','Maintenance'].includes(event.kind));
   const logs = evidence.filter(event => ['Log','Metric'].includes(event.kind));
   const signals = evidence.filter(event => ['Alert','Ticket','Provider'].includes(event.kind));
-  const relatedAlerts = evidence.filter(event => event.kind === 'Alert' && event.signature === incident.fingerprint &&
-    incident.confirmed.includes(event.service) && event.time === incident.alert);
+  const relatedAlerts = evidence.filter(event=>event.kind==='Alert' && incident.fingerprint && event.signature===incident.fingerprint);
   const alternative = evidence.find(event => event.id === incident.alternativeSource);
   const ready = observed && incident.causeSources.every(id =>
     evidence.some(event => event.id === id) || nearby.some(record => record.id === id));
   const availableIds = new Set([...evidence,...nearby].map(item=>item.id));
   const findings = incident.findings.filter(finding=>finding.ids.every(id=>availableIds.has(id)));
-  const guide = observed ? documents.find(document=>document.id===incident.document) : undefined;
+  const known = exact.find(record=>record.fix &&
+    (!record.resolvedAt || !record.version || !incident.serviceVersion || record.version===incident.serviceVersion));
+  const verifiedDocument = known && documents.find(document=>document.incident===known.id || document.id===known.runbook);
+  const release = sample && observed && changes.find(change=>change.version && logs.some(log=>
+    log.signature===incident.fingerprint && log.affectedVersion===change.version && log.timeAt>=change.timeAt));
+  const releaseLog = release && logs.find(log=>log.signature===incident.fingerprint &&
+    log.affectedVersion===release.version && log.timeAt>=release.timeAt);
+  const guide = observed ? (sample
+    ? verifiedDocument || documents.find(document=>document.service===incident.service &&
+      (document.signature===incident.fingerprint || (release && document.releaseSignature===incident.fingerprint)))
+    : documents.find(document=>document.id===incident.document)) : undefined;
   const relatedDocuments = documents.filter(document=>document !== guide && nearby.some(record=>record.id===document.incident));
-  const known = exact.find(record=>record.fix);
-  const verifiedDocument = relatedDocuments.find(document=>document.incident===known?.id) ||
-    (guide?.incident===known?.id && known ? guide : undefined);
   const activity = [
-    {action:'Read monitoring records', result:`${logs.length} log or metric records available`, query:incident.fingerprint, ids:logs.map(item=>item.id)},
-    {action:'Cross-check changes', result:`${changes.length} relevant change or maintenance records`, query:incident.service, ids:changes.map(item=>item.id)},
-    {action:'Search incident history', result:`${nearby.length} on the same service · ${exact.length} exact signature matches`, query:incident.fingerprint, ids:nearby.map(item=>item.id)},
-    {action:'Check alerts and reports', result:`${signals.length} monitoring, support, or provider signals`, query:`Available through ${cutoff === '23:59' ? 'latest snapshot' : cutoff}`, ids:signals.map(item=>item.id)},
+    {action:'Read monitoring records', result:`${logs.length} log or metric records available`, query:incident.fingerprint || 'No single error signature found', ids:logs.map(item=>item.id)},
+    {action:'Cross-check changes', result:`${changes.length} relevant change or maintenance records`, query:sample ? `${incident.service} · 2 hours before the alert` : incident.service, ids:changes.map(item=>item.id)},
+    {action:'Search incident history', result:`${nearby.length} on the same service · ${exact.length} exact signature matches`, query:incident.fingerprint || incident.service, ids:nearby.map(item=>item.id)},
+    {action:'Check alerts and reports', result:`${signals.length} monitoring, support, or provider signals`, query:sample ? 'Submitted alert and sample records' : `Available through ${cutoff === '23:59' ? 'latest snapshot' : cutoff}`, ids:signals.map(item=>item.id)},
     {action:'Look up procedures', result:verifiedDocument ? 'Found a procedure linked to a matching documented fix' : guide ? 'Found investigation guidance; no matching documented fix' : 'No incident procedure selected yet', query:incident.service, ids:[guide,...relatedDocuments].filter(Boolean).map(document=>document.id)},
   ];
+  let cause = ready ? incident.cause : 'No incident brief was available at this point.';
+  let causeSources = ready ? incident.causeSources : [];
+  let next = incident.next;
+  if (sample && observed) {
+    if (release) {
+      cause = `The recent release ${release.version} is the leading cause. ${release.detail} ${releaseLog.detail}`;
+      causeSources = [release.id,releaseLog.id];
+      next = guide?.steps[0]?.[1] || 'Compare the same operation on the previous and current versions.';
+    } else if (exact[0]?.cause) {
+      cause = `Likely repeat of ${exact[0].id}. Prior cause: ${exact[0].cause} Confirm it against the current alert.`;
+      causeSources = [...incident.causeSources,exact[0].id,...logs.map(log=>log.id)];
+      next = guide?.steps[0]?.[1] || 'Confirm that the conditions of the previous incident match this alert.';
+    } else {
+      cause = 'The available evidence does not establish a likely cause.';
+      causeSources = [...incident.causeSources,...logs.map(log=>log.id)];
+      if (changes.length) next = 'Compare the first errors with the recent changes below and check which touched the affected operation.';
+    }
+  }
+  const comparisons = comparable.map(record=>{
+    const sameService = record.service===incident.service;
+    const sameSignature = Boolean(incident.fingerprint && record.fingerprint===incident.fingerprint);
+    const versionDiffers = Boolean(record.version && incident.serviceVersion && record.version!==incident.serviceVersion);
+    return {record,match:sameService && sameSignature,reasons:[
+      sameService ? 'Same service' : `Different service · ${record.service}`,
+      sameSignature ? 'Same error signature' : incident.fingerprint ? 'Different error signature' : 'Current error signature unknown',
+      record.fix ? 'Fix documented' : 'Fix missing',
+      versionDiffers && `Version ${record.version} differs from ${incident.serviceVersion}`
+    ].filter(Boolean)};
+  });
+  const challenger = release || alternative
+    ? {claim:alternative ? incident.alternative : 'A shared upstream fault could also explain errors across versions.',
+      check:'Compare the same operation and upstream route on both versions. Similar failures on the older version would weaken the release hypothesis.',
+      sources:[alternative?.id,release?.id,releaseLog?.id].filter(Boolean)}
+    : exact[0]?.cause
+      ? {claim:'The same error code can appear even when the previous cause is absent.',
+        check:guide?.stopWhen || 'Check whether the confirmed cause from the previous record is present in the current logs. Its absence weakens the match.',
+        sources:[exact[0].id,...logs.map(event=>event.id)].slice(0,3)}
+      : {claim:'The alert may coincide with a change while the affected operation fails elsewhere.',
+        check:guide?.steps.find(([title])=>title.startsWith('Distinguish'))?.[1] ||
+          'Compare a failing and a successful operation. If both use the changed component, check their other differences before attributing the failure.',
+        sources:[...changes,...logs].slice(0,3).map(event=>event.id)};
+  const certainty = !ready || (sample && !release && !exact[0]?.cause) || incident.variant==='Unknown issue'
+    ? 'Unknown' : 'Likely';
   return {evidence, observed, nearby, exact, changes, alternative, ready, activity, relatedAlerts,
-    known, guide, relatedDocuments, verifiedDocument, findings,
-    cause:ready ? incident.cause : 'No incident brief was available at this point.'};
+    known, guide, relatedDocuments, verifiedDocument, findings, cause, causeSources, next, comparisons, challenger, certainty,
+    verify:known?.verification || (sample && guide ? guide.verify : incident.verify)};
 }
 
 export function priority(incident) {
