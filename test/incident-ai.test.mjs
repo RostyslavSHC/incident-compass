@@ -119,3 +119,45 @@ test('report analysis uses aggregate metrics and refuses malformed data without 
   assert.equal(context.repeated[0].fingerprint,'PAY_AUTH_TIMEOUT');
   assert.equal(context.privateNotes,undefined);
 });
+
+test('pitch questions have spoken-length answers in demo mode and support short follow-ups',async()=>{
+  const {post,sent} = setup(analysis,{key:''});
+  const question = 'How do you measure impact?';
+  const result = await post({question},'pitch');
+  assert.equal(result.status,200);
+  assert.equal(result.body.mode,'demo');
+  assert.match(result.body.answer,/fictional HTTP 503/);
+  assert.match(result.body.answer,/first check/);
+  assert.ok(result.body.answer.length<=560);
+  const followUp = await post({question:'Can you elaborate?',history:[{question,answer:result.body.answer}]},'pitch');
+  assert.deepEqual(followUp.body,result.body);
+  const alert = await post({question:'How do alerts reach the on-call engineer?'},'pitch');
+  assert.match(alert.body.answer,/Telegram/);
+  assert.equal(sent.length,0);
+});
+
+test('pitch grounded generation receives bounded conversation and falls back on provider errors',async()=>{
+  const answer = 'Aurelis uses source-linked evidence to help engineers investigate an incident.';
+  const {post,sent} = setup({answer});
+  const question = '  What does Aurelis do?  ';
+  const history = [1,2,3,4].map(index=>({question:`Question ${index}`,answer:'Prior response',other:'Ignored'}));
+  const result = await post({question,history,other:'Ignored'},'pitch');
+  assert.deepEqual(result,{status:200,body:{answer,mode:'gemini'}});
+  const transmitted = JSON.parse(sent[0].contents[0].parts[0].text);
+  assert.equal(transmitted.question,question.trim());
+  assert.deepEqual(transmitted.history,history.slice(-3).map(({question,answer})=>({question,answer})));
+  assert.ok(transmitted.projectFacts.some(fact=>fact.includes('four-week pilot')));
+  assert.equal(transmitted.other,undefined);
+  const unavailable = setup({answer},{status:429});
+  const fallback = await unavailable.post({question},'pitch');
+  assert.equal(fallback.body.mode,'demo');
+  assert.match(fallback.body.answer,/incident investigation desk/);
+});
+
+test('pitch rejects empty, oversized, and cross-origin requests before generation',async()=>{
+  const {post,sent} = setup();
+  assert.equal((await post({question:' '},'pitch')).status,400);
+  assert.equal((await post({question:'a'.repeat(401)},'pitch')).status,400);
+  assert.equal((await post({question:'What is Aurelis?'},'pitch',{origin:'https://elsewhere.example'})).status,403);
+  assert.equal(sent.length,0);
+});

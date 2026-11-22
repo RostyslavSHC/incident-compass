@@ -37,6 +37,7 @@
           <div class="persona-menu" id="persona-menu" popover="auto" role="menu" aria-label="Act as responder"></div>
         </div>
         <button class="small" id="notifications" data-notifications>Notifications <span id="notification-count" class="count-pill" hidden></span></button>
+        <button class="small" id="pitch-qa" type="button" aria-haspopup="dialog">Pitch Q&amp;A</button>
         <button class="small" id="night" aria-pressed="false" title="Toggle simplified on-call view">3 a.m. mode</button>
       </div>
     </header>
@@ -45,6 +46,39 @@
   </div>
   <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
   <dialog id="assistant-window" aria-labelledby="assistant-title"></dialog>
+  <dialog id="pitch-window" aria-labelledby="pitch-title">
+    <div class="dialog-head">
+      <h2 id="pitch-title">Pitch Q&amp;A</h2>
+      <form method="dialog"><button aria-label="Close Pitch Q&amp;A">✕</button></form>
+    </div>
+    <div class="dialog-body">
+      <form id="pitch-form">
+        <label for="pitch-question">Question in English</label>
+        <div class="pitch-input-row">
+          <input id="pitch-question" name="question" maxlength="400" autocomplete="off" placeholder="Speak or type a question…" required>
+          <button type="submit">Ask</button>
+          <button id="pitch-listen" class="primary" type="button" autofocus>Listen</button>
+        </div>
+      </form>
+      <p id="pitch-status" class="small quiet" role="status"></p>
+      <div id="pitch-examples" class="buttons" aria-label="Suggested questions">
+        <button class="small" type="button" data-pitch-example>What does Aurelis do?</button>
+        <button class="small" type="button" data-pitch-example>How do you measure impact?</button>
+        <button class="small" type="button" data-pitch-example>How do alerts reach the on-call engineer?</button>
+      </div>
+      <section class="panel block pitch-caption" aria-labelledby="pitch-answer-title">
+        <div class="pitch-caption-head">
+          <h3 id="pitch-answer-title">Answer</h3>
+          <div class="pitch-voice-controls">
+            <label><input id="pitch-auto-speak" type="checkbox" checked> Speak answers</label>
+            <button id="pitch-play" class="small" type="button" disabled>Replay voice</button>
+          </div>
+        </div>
+        <p id="pitch-answer" aria-live="polite" aria-atomic="true">Ask about the demo, its impact or how Aurelis would be deployed.</p>
+        <p id="pitch-mode" class="small quiet" hidden></p>
+      </section>
+    </div>
+  </dialog>
   <div id="toast-announcer" class="sr-only" role="status" aria-atomic="true"></div>
   <div id="toast-stack" aria-label="Recent notifications"></div>
 </body>

@@ -52,6 +52,10 @@ When an alert fires, the Desk shows the evidence-linked brief immediately and re
 
 The microphone uses browser dictation where available, subject to the browser's microphone permission and speech service. The assistant also accepts typed questions and can read a response aloud.
 
+### Pitch Q&A
+
+Open **Pitch Q&A** from the header and choose **Listen** to ask a question in English. The recognized words appear in the question field, and Aurelis answers aloud with the same answer on screen. Type a question or choose a suggested question if microphone access is unavailable. Use **Speak answers** to mute automatic playback. With Gemini configured, the assistant answers from the project's demo and implementation facts. The bundled demo answers also work without an API key.
+
 ## Demo path
 
 1. **After a release** shows the checkout failure and the recent Payments API release. Open **Investigation log** for the actual record lookups and **Time Machine** to move between the alert at 10:02 and the provider bulletin at 10:07. The bulletin's availability time differs from the provider's estimated outage start.

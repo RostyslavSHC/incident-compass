@@ -19,6 +19,8 @@ const files = {
   '/reports.mjs':['reports.mjs','text/javascript; charset=utf-8'],
   '/impact-cases.mjs':['impact-cases.mjs','text/javascript; charset=utf-8'],
   '/impact.mjs':['impact.mjs','text/javascript; charset=utf-8'],
+  '/pitch-qa.mjs':['pitch-qa.mjs','text/javascript; charset=utf-8'],
+  '/pitch-voice.mjs':['pitch-voice.mjs','text/javascript; charset=utf-8'],
 };
 
 function json(response,status,data) {
@@ -34,6 +36,7 @@ createServer(async (request,response)=>{
     const pathname = new URL(request.url,localOrigin).pathname;
     if (request.method === 'GET' && pathname === '/api/status') return json(response,200,{gemini:Boolean(key)});
     if (request.method === 'POST' && pathname === '/api/report-analysis') return await incidentAi(request,response,'report');
+    if (request.method === 'POST' && pathname === '/api/pitch-qa') return await incidentAi(request,response,'pitch');
     if (request.method === 'POST' && ['/api/ask','/api/analysis','/api/resolution'].includes(pathname)) {
       return await incidentAi(request,response,pathname==='/api/resolution' ? 'resolution' : pathname==='/api/analysis');
     }

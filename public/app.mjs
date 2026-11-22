@@ -5,10 +5,12 @@ import {
 } from './simulations.mjs';
 import {demoReportEvents, durationLabel, exposureAssumptions, exposureAt, mergeIncidentWork, reportPeriod, reportSummary} from './reports.mjs';
 import {createImpactView} from './impact.mjs';
+import {setupPitchVoice} from './pitch-voice.mjs';
 
 const main = document.querySelector('#main');
 const dialog = document.querySelector('#dialog');
 const assistantWindow = document.querySelector('#assistant-window');
+const pitchWindow = document.querySelector('#pitch-window');
 const persona = document.querySelector('#persona');
 const personaMenu = document.querySelector('#persona-menu');
 const personaName = document.querySelector('#persona-name');
@@ -135,6 +137,11 @@ const channelSetup = {
   telegram:{name:'Telegram',provider:'Telegram Bot API',setup:'https://t.me/BotFather',fields:[['TELEGRAM_BOT_TOKEN','BotFather token',true],['TELEGRAM_CHAT_ID','Chat ID or public channel username']]},
 };
 
+setupPitchVoice(pitchWindow, () => connected || checkingGemini);
+document.querySelector('#pitch-qa').addEventListener('click', () => {
+  if (assistantWindow.open) assistantWindow.close();
+  pitchWindow.showModal();
+});
 renderPersonaChoices();
 document.body.classList.toggle('night', localStorage.getItem('ic-night') === 'true');
 night.setAttribute('aria-pressed', String(document.body.classList.contains('night')));

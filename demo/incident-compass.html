@@ -281,6 +281,23 @@ dialog::backdrop {background:#1718128c}
 .dialog-body form {display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .dialog-body input {flex:1 1 16rem}
 .chat-answer {white-space:pre-wrap}
+#pitch-window {width:min(690px,calc(100% - 28px));max-height:calc(100dvh - 36px);overflow:hidden}
+#pitch-window[open] {display:flex;flex-direction:column}
+#pitch-window .dialog-head {flex:none;align-items:center}
+#pitch-window .dialog-body {min-height:0;overflow-y:auto;overscroll-behavior:contain}
+#pitch-form {display:grid;margin-top:0}
+#pitch-form label {font-weight:700}
+.pitch-input-row,.pitch-caption-head,.pitch-voice-controls {display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pitch-input-row input {min-width:0}
+#pitch-status {min-height:1.4em}
+.pitch-caption {margin-bottom:0}
+.pitch-caption-head {justify-content:space-between}
+.pitch-caption-head h3 {margin:0}
+.pitch-voice-controls label {display:flex;align-items:center;gap:5px;font-size:.875rem}
+.pitch-voice-controls input {accent-color:var(--ink)}
+#pitch-answer {margin:.7rem 0 0;font-size:clamp(1.08rem,2.75vw,1.35rem);line-height:1.5;overflow-wrap:anywhere}
+#pitch-mode {margin:.55rem 0 0}
+::highlight(pitch-spoken) {background:#d7ed7e;color:#191a14}
 .ai-analysis {border-inline-start:3px solid var(--blue)}
 .ai-analysis h3 {margin:0}
 .ai-analysis p {margin:.6rem 0}
@@ -1764,9 +1781,313 @@ function createImpactView(escape) {
 }
 
 
+const pitchQuestionLimit = 400;
+const pitchAnswerLimit = 560;
+
+const topics = [
+  {
+    match:/\b(?:privacy|security|sensitive|secrets?|isolation|tenant|cross[- ]customer|production.ready)\b/i,
+    answer:'Aurelis scopes reusable history to the same customer, service, error signature, and known version. The demo uses fictional records. A deployment would start with approved, de-identified data and read-only access, and we would validate customer isolation before expanding.',
+  },
+  {
+    match:/\b(?:costs?|pricing|price|charge|funding|paid pilot|business model)\b/i,
+    answer:'We propose a fixed-fee pilot on one service. Pricing would be agreed after we choose the service and define the evaluation scope.',
+  },
+  {
+    match:/\b(?:pilot|implementation|roadmap|rollout plan|next steps?|week one|get started)\b/i,
+    answer:'We propose a four-week pilot on one service with an on-call lead and 20 approved, de-identified past incidents. We would agree on success criteria, replay the evidence available at alert time, and compare decision time and first-check accuracy before expanding.',
+  },
+  {
+    match:/\b(?:illustrativ\w*|3 h(?:ours?)?|three hours|20 eligible|twenty eligible|10 minutes|ten minutes)\b/i,
+    answer:'The example assumes 20 eligible alerts per week and 10 minutes saved on each, for 3 hours and 20 minutes of engineering time. Those figures are illustrative. A pilot would measure the actual time saved.',
+  },
+  {
+    match:/\b(?:used in production|tested in production|live incidents|real customers|customer results|real data|real incidents|production results)\b/i,
+    answer:'The current demo uses fictional incidents and telemetry. It demonstrates the investigation workflow and a way to measure time to a supported decision. We would test it on approved historical data before evaluating a live deployment.',
+  },
+  {
+    match:/\b(?:value|business impact|losses?|money|revenue|financial|exposure|roi|savings|downtime)\b/i,
+    answer:'Aurelis helps engineers prioritize customer-facing failures and reach a supported decision sooner. The demo estimates financial exposure from editable assumptions such as affected transactions per minute, incident duration, and value per transaction. We would validate time savings and business impact during a pilot.',
+  },
+  {
+    match:/\b(?:impact|measure\w*|validat\w*|benchmark\w*|metrics?|proof|prove|baseline|experiment|saved|faster|saves?\s+time|saves?\s+engineers?\s+time)\b/i,
+    answer:'Measure Impact times two comparable fictional HTTP 503 investigations, one manual and one assisted. The timer stops when the engineer selects both the supported likely cause and the appropriate first check. A pilot would check decision time and first-check accuracy on approved historical incidents.',
+  },
+  {
+    match:/\b(?:wrong|hallucinat\w*|trust|uncertain\w*|confidence|automatically fix|automated fix|human|false positive)\b/i,
+    answer:'The brief links its hypothesis to source records, states what remains uncertain, and proposes a specific verification step. An engineer confirms the diagnosis and reviews the resolution before it is saved. Aurelis leaves production changes to the engineer.',
+  },
+  {
+    match:/\b(?:blockers?|risks?|limitations?|missing evidence|data access)\b/i,
+    answer:'The pilot needs approved data access and enough timestamped evidence to replay cases. Aurelis can flag missing evidence and version mismatches. We would check the quality of the recommendations before connecting live monitoring.',
+  },
+  {
+    match:/\b(?:pagerduty|incident\.io|competitors?|different\w*|unique|advantage|new here|why (?:aurelis|you|your))\b/i,
+    answer:'Aurelis combines version-aware incident history with a brief that links the evidence for a likely cause and recommends a first check. Its Measure Impact exercise lets a team compare time to a supported decision with and without that brief.',
+  },
+  {
+    match:/\b(?:p1|p2|p3|prioriti[sz]\w*|severit\w*|critical|urgency)\b/i,
+    answer:'The suggested priority uses service criticality and the portion of traffic affected. A widespread checkout failure can rank above a small issue on a nonessential service. Engineers can review and override the suggested priority.',
+  },
+  {
+    match:/\b(?:telegram|notifications?|email|sms|twilio|resend|escalat\w*|acknowledg\w*|messag\w*|accepts?|alerts? (?:reach|go|delivery)|(?:send|route) alerts?)\b/i,
+    answer:'One reviewed alert can go to approved email and Telegram destinations. In Telegram, responders can accept or decline a private page, and a decline or timeout escalates to the team chat. Critical alerts can go straight to the group for someone to claim.',
+  },
+  {
+    match:/\b(?:clearpay|provider bulletin|payment timeout|2\.8\.0|after a release|release case|pay_auth_timeout)\b/i,
+    answer:'In the checkout demo, errors cluster on Payments API version 2.8.0 at its new one-second timeout. A provider bulletin at 10:07 adds another possible contributor. The first check is to compare old and new versions on the same provider route and time window.',
+  },
+  {
+    match:/\b(?:sign.ins? after key rotation|signing.key cache|jwks_cache_miss|inc-104|rb-008|repeat (?:case|incident|alert))\b/i,
+    answer:'The sample sign-in failure matches an earlier signing-key cache incident on the same service and version. The first check is to compare the active signing key with the keys cached on the affected gateway node. The earlier case links to the documented recovery procedure.',
+  },
+  {
+    match:/\b(?:inventory (?:database|writes|stalls?)|stock import|inv_commit_stall|unknown issue|unfamiliar (?:case|incident|failure))\b/i,
+    answer:'The sample inventory writes stall during commit and have no matching known fix. The brief shows a replica resize and stock import as nearby changes. The first check is to compare stalled and successful writes and see whether the resized replica is on that request path.',
+  },
+  {
+    match:/\b(?:history|archive|past incident|runbooks?|repeat\w*|memory|reus\w*)\b/i,
+    answer:'Aurelis checks customer, service, error signature, and known version before suggesting a prior fix. It can show other cases for comparison. After recovery, an engineer can save the confirmed cause, fix, and recovery evidence for future incidents.',
+  },
+  {
+    match:/\b(?:scenario\w*|503|release\w*|deploy\w*|unfamiliar)\b/i,
+    answer:'The demo covers a repeat sign-in incident, a checkout failure after a release, and an unfamiliar inventory write stall. Aurelis links the relevant evidence and offers a first check for each. For an unfamiliar failure, it says when no known fix applies.',
+  },
+  {
+    match:/\b(?:tech\w*|stack|model|architecture|gemini|llm|where.*ai|how.*ai|ai.*(?:work|adds?|do))\b/i,
+    answer:'Aurelis runs on Node.js with a browser dashboard. Its investigation logic assembles incident evidence and Gemini can summarize that evidence and answer follow-up questions. Browser speech recognition and speech synthesis handle the microphone and spoken answers.',
+  },
+  {
+    match:/\b(?:built (?:it|this|aurelis)|founders?|mykhailo|rostyslav|your team|team members?|nexora)\b/i,
+    answer:'Mykhailo Barybin and Rostyslav Shcherbyk built Aurelis as team M5 F90, Nexora. In a pilot, we would build the data import, run the evaluation, and review progress weekly with the on-call lead.',
+  },
+  {
+    match:/\b(?:who|team|customers?|users?|target market)\b/i,
+    answer:'Team M5 F90, Nexora, built Aurelis for on-call engineers and operations leads at cloud providers that support several customers. The on-call team can see which incident needs attention and what to verify first.',
+  },
+  {
+    match:/\b(?:aurelis|product|problem|solution|overview|explain|pitch|how (?:it|this) works?)\b/i,
+    answer:'Aurelis is an incident investigation desk for on-call teams at multi-customer cloud providers. It turns a raw alert into a source-linked hypothesis and a first check. Engineers can review the evidence, confirm the cause, and save a verified resolution for future incidents.',
+  },
+];
+
+const pitchFacts = topics.map(({answer}) => answer);
+
+function pitchFallback(question, history = []) {
+  const lastQuestion = history.at(-1)?.question ?? '';
+  const followUp = /^(?:and\b|why\??$|how\??$|can you (?:expand|elaborate)|tell me more|what (?:about|do you mean) by that)/i.test(question.trim());
+  const topic = topics.find(({match}) => match.test(question))
+    ?? (followUp ? topics.find(({match}) => match.test(lastQuestion)) : undefined);
+  return topic?.answer ?? 'I do not have a verified answer to that in the demo. I can explain how Aurelis investigates incidents, measures its impact, or would be evaluated in a pilot.';
+}
+
+
+function setupPitchVoice(dialog, shouldRequestAnswer) {
+  const form = dialog.querySelector('#pitch-form');
+  const question = dialog.querySelector('#pitch-question');
+  const submit = form.querySelector('button[type="submit"]');
+  const listen = dialog.querySelector('#pitch-listen');
+  const status = dialog.querySelector('#pitch-status');
+  const answer = dialog.querySelector('#pitch-answer');
+  const mode = dialog.querySelector('#pitch-mode');
+  const autoSpeak = dialog.querySelector('#pitch-auto-speak');
+  const play = dialog.querySelector('#pitch-play');
+  const examples = [...dialog.querySelectorAll('[data-pitch-example]')];
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const speaker = window.speechSynthesis;
+  const canSpeak = Boolean(speaker && window.SpeechSynthesisUtterance);
+  const history = [];
+  let recognition;
+  let request;
+  let utterance;
+  let reply = '';
+
+  if (!canSpeak) {
+    autoSpeak.checked = false;
+    autoSpeak.disabled = true;
+  }
+
+  function updateControls() {
+    submit.disabled = Boolean(request || recognition);
+    for (const example of examples) example.disabled = submit.disabled;
+    question.readOnly = Boolean(recognition);
+    listen.disabled = Boolean(request);
+    listen.textContent = recognition ? 'Finish listening' : 'Listen';
+    play.disabled = !canSpeak || !reply || Boolean(request || recognition);
+    play.textContent = utterance ? 'Stop voice' : 'Replay voice';
+  }
+
+  function clearHighlight() {
+    window.CSS?.highlights?.delete('pitch-spoken');
+  }
+
+  function stopVoice() {
+    if (!utterance) return;
+    utterance = null;
+    speaker.cancel();
+    clearHighlight();
+    updateControls();
+  }
+
+  function speak() {
+    if (!canSpeak || !reply || utterance || recognition || request) return;
+    const current = new SpeechSynthesisUtterance(reply);
+    current.lang = 'en-CA';
+    current.rate = 0.94;
+    utterance = current;
+    updateControls();
+    current.onstart = () => {
+      if (utterance === current && dialog.open) status.textContent = 'Speaking…';
+    };
+    current.onboundary = event => {
+      if (utterance !== current || (event.name && event.name !== 'word') ||
+          !window.CSS?.highlights || !window.Highlight) return;
+      const start = event.charIndex;
+      const length = event.charLength || reply.slice(start).match(/^\S+/u)?.[0].length || 0;
+      if (!Number.isInteger(start) || start < 0 || start >= reply.length || !length) return;
+      const range = document.createRange();
+      range.setStart(answer.firstChild, start);
+      range.setEnd(answer.firstChild, Math.min(start + length, reply.length));
+      window.CSS.highlights.set('pitch-spoken', new Highlight(range));
+    };
+    function finish(message) {
+      if (utterance !== current) return;
+      utterance = null;
+      clearHighlight();
+      updateControls();
+      if (dialog.open) status.textContent = message;
+    }
+    current.onend = () => finish('');
+    current.onerror = () => finish('Voice playback is unavailable. The answer is shown below.');
+    try { speaker.speak(current); }
+    catch { finish('Voice playback is unavailable. The answer is shown below.'); }
+  }
+
+  async function ask(text) {
+    text = text.trim().slice(0, question.maxLength);
+    if (!text || !dialog.open || request || recognition) return;
+    stopVoice();
+    const pending = new AbortController();
+    request = pending;
+    question.value = text;
+    status.textContent = 'Preparing an answer…';
+    answer.setAttribute('aria-busy', 'true');
+    updateControls();
+    let nextReply;
+    let answerMode = 'Demo answers';
+    if (shouldRequestAnswer()) {
+      const timer = setTimeout(() => pending.abort(), 8_000);
+      try {
+        const response = await fetch('/api/pitch-qa', {
+          method: 'POST',
+          signal: pending.signal,
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({question: text, history}),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (typeof data.answer === 'string') nextReply = data.answer.trim();
+          if (nextReply && data.mode === 'gemini') answerMode = 'Gemini';
+        }
+      } catch { /* Fall back to the bundled Q&A if the request fails. */ }
+      finally { clearTimeout(timer); }
+    }
+    if (request !== pending || !dialog.open) return;
+    request = null;
+    reply = nextReply || pitchFallback(text, history);
+    history.push({question: text, answer: reply});
+    if (history.length > 3) history.shift();
+    answer.textContent = reply;
+    answer.removeAttribute('aria-busy');
+    mode.textContent = answerMode;
+    mode.hidden = false;
+    status.textContent = '';
+    updateControls();
+    if (autoSpeak.checked) speak();
+  }
+
+  listen.addEventListener('click', () => {
+    if (recognition) {
+      recognition.stop();
+      return;
+    }
+    if (!Recognition) {
+      status.textContent = 'Voice input is unavailable in this browser. You can type your question.';
+      question.focus();
+      return;
+    }
+    stopVoice();
+    const current = new Recognition();
+    let final = '';
+    let failed = false;
+    recognition = current;
+    current.lang = 'en-CA';
+    current.interimResults = true;
+    status.textContent = 'Listening… Ask your question in English.';
+    updateControls();
+    current.onresult = event => {
+      if (recognition !== current || !dialog.open) return;
+      const results = Array.from(event.results);
+      question.value = results.map(result => result[0].transcript).join(' ').trim().slice(0, question.maxLength);
+      final = results.filter(result => result.isFinal).map(result => result[0].transcript).join(' ').trim();
+    };
+    current.onerror = () => {
+      if (recognition !== current || !dialog.open) return;
+      failed = true;
+      status.textContent = 'Could not hear the question. Check microphone access or type it instead.';
+    };
+    current.onend = () => {
+      if (recognition !== current) return;
+      recognition = null;
+      updateControls();
+      if (!dialog.open || failed) return;
+      if (final) void ask(final);
+      else status.textContent = 'No complete question heard. Try again or edit the text.';
+    };
+    try { current.start(); }
+    catch {
+      recognition = null;
+      updateControls();
+      status.textContent = 'Could not start the microphone. You can type your question.';
+    }
+  });
+
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    void ask(question.value);
+  });
+  for (const example of examples) {
+    example.addEventListener('click', () => void ask(example.textContent));
+  }
+  play.addEventListener('click', () => {
+    if (!utterance) speak();
+    else {
+      stopVoice();
+      status.textContent = 'Voice stopped.';
+    }
+  });
+  autoSpeak.addEventListener('change', () => {
+    if (!autoSpeak.checked && utterance) play.click();
+  });
+  dialog.addEventListener('close', () => {
+    const pending = request;
+    request = null;
+    pending?.abort();
+    const listening = recognition;
+    recognition = null;
+    listening?.abort();
+    stopVoice();
+    updateControls();
+    status.textContent = '';
+    answer.removeAttribute('aria-busy');
+  });
+}
+
+
 const main = document.querySelector('#main');
 const dialog = document.querySelector('#dialog');
 const assistantWindow = document.querySelector('#assistant-window');
+const pitchWindow = document.querySelector('#pitch-window');
 const persona = document.querySelector('#persona');
 const personaMenu = document.querySelector('#persona-menu');
 const personaName = document.querySelector('#persona-name');
@@ -1893,6 +2214,11 @@ const channelSetup = {
   telegram:{name:'Telegram',provider:'Telegram Bot API',setup:'https://t.me/BotFather',fields:[['TELEGRAM_BOT_TOKEN','BotFather token',true],['TELEGRAM_CHAT_ID','Chat ID or public channel username']]},
 };
 
+setupPitchVoice(pitchWindow, () => connected || checkingGemini);
+document.querySelector('#pitch-qa').addEventListener('click', () => {
+  if (assistantWindow.open) assistantWindow.close();
+  pitchWindow.showModal();
+});
 renderPersonaChoices();
 document.body.classList.toggle('night', localStorage.getItem('ic-night') === 'true');
 night.setAttribute('aria-pressed', String(document.body.classList.contains('night')));
@@ -4718,6 +5044,7 @@ render();
           <div class="persona-menu" id="persona-menu" popover="auto" role="menu" aria-label="Act as responder"></div>
         </div>
         <button class="small" id="notifications" data-notifications>Notifications <span id="notification-count" class="count-pill" hidden></span></button>
+        <button class="small" id="pitch-qa" type="button" aria-haspopup="dialog">Pitch Q&amp;A</button>
         <button class="small" id="night" aria-pressed="false" title="Toggle simplified on-call view">3 a.m. mode</button>
       </div>
     </header>
@@ -4726,6 +5053,39 @@ render();
   </div>
   <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
   <dialog id="assistant-window" aria-labelledby="assistant-title"></dialog>
+  <dialog id="pitch-window" aria-labelledby="pitch-title">
+    <div class="dialog-head">
+      <h2 id="pitch-title">Pitch Q&amp;A</h2>
+      <form method="dialog"><button aria-label="Close Pitch Q&amp;A">✕</button></form>
+    </div>
+    <div class="dialog-body">
+      <form id="pitch-form">
+        <label for="pitch-question">Question in English</label>
+        <div class="pitch-input-row">
+          <input id="pitch-question" name="question" maxlength="400" autocomplete="off" placeholder="Speak or type a question…" required>
+          <button type="submit">Ask</button>
+          <button id="pitch-listen" class="primary" type="button" autofocus>Listen</button>
+        </div>
+      </form>
+      <p id="pitch-status" class="small quiet" role="status"></p>
+      <div id="pitch-examples" class="buttons" aria-label="Suggested questions">
+        <button class="small" type="button" data-pitch-example>What does Aurelis do?</button>
+        <button class="small" type="button" data-pitch-example>How do you measure impact?</button>
+        <button class="small" type="button" data-pitch-example>How do alerts reach the on-call engineer?</button>
+      </div>
+      <section class="panel block pitch-caption" aria-labelledby="pitch-answer-title">
+        <div class="pitch-caption-head">
+          <h3 id="pitch-answer-title">Answer</h3>
+          <div class="pitch-voice-controls">
+            <label><input id="pitch-auto-speak" type="checkbox" checked> Speak answers</label>
+            <button id="pitch-play" class="small" type="button" disabled>Replay voice</button>
+          </div>
+        </div>
+        <p id="pitch-answer" aria-live="polite" aria-atomic="true">Ask about the demo, its impact or how Aurelis would be deployed.</p>
+        <p id="pitch-mode" class="small quiet" hidden></p>
+      </section>
+    </div>
+  </dialog>
   <div id="toast-announcer" class="sr-only" role="status" aria-atomic="true"></div>
   <div id="toast-stack" aria-label="Recent notifications"></div>
 </body>

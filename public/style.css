@@ -272,6 +272,23 @@ dialog::backdrop {background:#1718128c}
 .dialog-body form {display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .dialog-body input {flex:1 1 16rem}
 .chat-answer {white-space:pre-wrap}
+#pitch-window {width:min(690px,calc(100% - 28px));max-height:calc(100dvh - 36px);overflow:hidden}
+#pitch-window[open] {display:flex;flex-direction:column}
+#pitch-window .dialog-head {flex:none;align-items:center}
+#pitch-window .dialog-body {min-height:0;overflow-y:auto;overscroll-behavior:contain}
+#pitch-form {display:grid;margin-top:0}
+#pitch-form label {font-weight:700}
+.pitch-input-row,.pitch-caption-head,.pitch-voice-controls {display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pitch-input-row input {min-width:0}
+#pitch-status {min-height:1.4em}
+.pitch-caption {margin-bottom:0}
+.pitch-caption-head {justify-content:space-between}
+.pitch-caption-head h3 {margin:0}
+.pitch-voice-controls label {display:flex;align-items:center;gap:5px;font-size:.875rem}
+.pitch-voice-controls input {accent-color:var(--ink)}
+#pitch-answer {margin:.7rem 0 0;font-size:clamp(1.08rem,2.75vw,1.35rem);line-height:1.5;overflow-wrap:anywhere}
+#pitch-mode {margin:.55rem 0 0}
+::highlight(pitch-spoken) {background:#d7ed7e;color:#191a14}
 .ai-analysis {border-inline-start:3px solid var(--blue)}
 .ai-analysis h3 {margin:0}
 .ai-analysis p {margin:.6rem 0}
