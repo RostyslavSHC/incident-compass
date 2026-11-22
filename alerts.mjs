@@ -65,11 +65,11 @@ function channelStatus(config) {
 
 function formatAlert(incident,level) {
   const label = severity[level];
-  const title = `[Incident Compass demo] ${level} ${label} | ${incident.title}`;
+  const title = `[Aurelis demo] ${level} ${label} | ${incident.title}`;
   const impact = `${incident.affectedPct}% of monitored operations in the sample.`;
   return {
-    email:{subject:title,text:`${incident.id} · ${incident.service} · ${incident.alert} ET\n${impact}\n\nSuggested first check: ${incident.next}\n\nThis is a simulated incident sent from Incident Compass.`},
-    sms:{text:`Incident Compass DEMO: ${level} ${label} ${incident.id} - ${incident.title}. ${incident.affectedPct}% affected in sample. Review Incident Compass.`},
+    email:{subject:title,text:`${incident.id} · ${incident.service} · ${incident.alert} ET\n${impact}\n\nSuggested first check: ${incident.next}\n\nThis is a simulated incident sent from Aurelis.`},
+    sms:{text:`Aurelis DEMO: ${level} ${label} ${incident.id} - ${incident.title}. ${incident.affectedPct}% affected in sample. Review Aurelis.`},
     telegram:renderTelegram(incident,level),
   };
 }
@@ -183,13 +183,13 @@ export function createAlertApi({port,json,request = fetch}) {
   setInterval(()=>void telegram.step().catch(()=>{}),2500).unref();
   let saving = false;
   return async (req,res,path)=>{
-    if (req.headers.host !== `127.0.0.1:${port}`) return json(res,403,{error:'Open Incident Compass on its local address.'});
+    if (req.headers.host !== `127.0.0.1:${port}`) return json(res,403,{error:'Open Aurelis on its local address.'});
     if (path==='/api/alerts/status' && req.method==='GET') {
       return json(res,200,{channels:channelStatus(await loadConfig()),deliveries:deliveries.slice(0,20)});
     }
     if (path==='/api/alerts/telegram-routing' && req.method==='GET') return json(res,200,await telegram.list());
     if (req.method!=='POST' || req.headers.origin!==origin || req.headers['content-type']?.split(';',1)[0].trim()!=='application/json') {
-      return json(res,403,{error:'Use the local Incident Compass dashboard.'});
+      return json(res,403,{error:'Use the local Aurelis dashboard.'});
     }
     const input=await readJson(req);
     if (!input || Array.isArray(input) || typeof input!=='object') return json(res,400,{error:'Invalid request.'});

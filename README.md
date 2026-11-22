@@ -1,4 +1,6 @@
-# Incident Compass
+# A U R E L I S
+
+**Intelligence. Awareness. Action.**
 
 A local cloud incident desk for the Brampton AI Innovator challenge. It includes 30 fictional services, 10 archived incidents and four alert scenarios.
 

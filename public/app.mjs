@@ -715,7 +715,7 @@ function desk() {
 }
 
 function layout(title, detail, content, search = false) {
-  return `<section class="page intro"><div class="page-hero"><div><div class="kicker">Incident Compass / Demo workspace</div><h1>${title}</h1><p>${detail}</p></div>
+  return `<section class="page intro"><div class="page-hero"><div><div class="kicker">Aurelis / Demo workspace</div><h1>${title}</h1><p>${detail}</p></div>
     ${search ? '<input id="search" type="search" aria-label="Filter records" placeholder="Filter records…">' : ''}</div>${content}</section>`;
 }
 function serviceList() {
@@ -784,7 +784,7 @@ function chat() {
     if (!incident) return '';
     const available = workspace.tasks[message.id]?.status === 'open';
     const time = new Date(message.time).toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'2-digit',minute:'2-digit'});
-    return `<li><small class="mono">${html(time)} ET · ${message.type === 'open' ? 'INCIDENT COMPASS / @TEAM' : 'OWNERSHIP CONFIRMED'}</small>
+    return `<li><small class="mono">${html(time)} ET · ${message.type === 'open' ? 'A U R E L I S / @TEAM' : 'OWNERSHIP CONFIRMED'}</small>
       ${message.type === 'open' ? `<h3>Unclaimed at escalation: ${incident.title}</h3><p>${html(message.reason)} · ${incident.id} · P1 · ${incident.service}</p>` : `<p><strong>${html(message.by)}</strong> accepted ${message.id}.</p>`}
       <div class="buttons"><button data-open-case="${incident.id}" class="small">Open incident</button>
       ${message.type === 'open' && available ? `<button class="small primary" data-task="claim" data-id="${incident.id}">Claim as ${html(actor)}</button>` : ''}</div></li>`;
@@ -1270,7 +1270,7 @@ async function relayNewAlert(incident,level) {
 function pairRouteDestination(mode) {
   const team=mode==='team';
   openDialog('Telegram routing',team?'Pair the team group':'Pair a private responder',`<form class="delivery-form" data-route-pair="${mode}">
-    <p>${team?'Add the existing Incident Compass bot to your Telegram team group. The pairing command identifies the group.':'Name the responder and share the generated one-time link with them. They tap Start in the private bot chat.'}</p>
+    <p>${team?'Add the Aurelis bot to your Telegram team group. The pairing command identifies the group.':'Name the responder and share the generated one-time link with them. They tap Start in the private bot chat.'}</p>
     ${team?'':'<label for="pager-name">Responder name</label><input id="pager-name" name="label" required maxlength="65">'}
     <div class="buttons"><button class="small primary" type="submit">Create pairing link</button><button class="small" type="button" data-telegram-routing>Back</button></div>
     <div data-route-pairing></div><p data-delivery-status role="status"></p></form>
@@ -1407,7 +1407,7 @@ function providerForm(key) {
   const guidance={
     sms:'Use a Twilio account and an SMS-capable sender that can send custom texts to Canadian numbers. Enter the sender in international format, including the +.',
     email:'Verify a domain you control in Resend, then create a sending-access API key for that domain and enter a sender address on it.',
-    telegram:'Paste your BotFather token and select Pair and save my chat. Incident Compass will save and verify the connection after you tap Start in your private chat with the bot.',
+    telegram:'Paste your BotFather token and select Pair and save my chat. Aurelis will save and verify the connection after you tap Start in your private chat with the bot.',
   };
   openDialog(channel.provider,'Configure ' + channel.name,`<p>${guidance[key]}</p>
     <p><a target="_blank" rel="noreferrer" href="${channel.setup}">Open ${key==='telegram'?'BotFather':channel.provider}</a>
@@ -1448,7 +1448,7 @@ async function discoverTelegram(id,personal=false) {
       if (personal) {
         dialog.querySelector('#TELEGRAM_BOT_TOKEN').value='';
         pairing.innerHTML=`<div class="panel"><a href="${html(result.url)}" target="_blank" rel="noreferrer">Open your bot in Telegram</a>
-          <p>Tap Start in your private chat with this bot. Incident Compass will finish automatically.</p></div>`;
+          <p>Tap Start in your private chat with this bot. Aurelis will finish automatically.</p></div>`;
         status.textContent='Waiting for you to tap Start in Telegram…';
         void waitForTelegramPairing(result.id,pairing.firstElementChild,status,pairButton);
         return;

@@ -38,7 +38,7 @@ function routingText(kind,wait,deadline) {
 export function renderTelegram(incident,level,kind='notice',wait=60,deadline) {
   const [icon,title]=presentations[level];
   const route = routingText(kind,wait,deadline);
-  const markup=`${icon} <b>${level} · ${title}</b>\n<b>${escape(incident.title)}</b>\n<code>${escape(incident.id)}</code> · ${escape(incident.service)} · ${incident.alert} ET\n\n📊 <b>Impact</b> · ${incident.affectedPct}% of monitored operations in this sample\n🔎 <b>First check</b>\n${escape(incident.next)}${route}\n\n🧪 Incident Compass · simulated incident`;
+  const markup=`${icon} <b>${level} · ${title}</b>\n<b>${escape(incident.title)}</b>\n<code>${escape(incident.id)}</code> · ${escape(incident.service)} · ${incident.alert} ET\n\n📊 <b>Impact</b> · ${incident.affectedPct}% of monitored operations in this sample\n🔎 <b>First check</b>\n${escape(incident.next)}${route}\n\n🧪 A U R E L I S · simulated incident`;
   return {markup,text:plain(markup)};
 }
 
@@ -61,7 +61,7 @@ function renderTestNotice(id,level,input) {
   const actions = text('actions',1000);
   if (!title || !description || actions===null) return null;
   const sections = [
-    '🧪 <b>TEST EVENT · Incident Compass</b>',
+    '🧪 <b>TEST EVENT · A U R E L I S</b>',
     `<b>${level} · ${simulationSeverities[level]}</b> · ${simulationStatuses[input.status]}`,
     `<b>${escape(title)}</b>`,
     `<code>${escape(id)}</code> · ${escape(input.service)}`,
@@ -352,7 +352,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     if(!match||known?.enrollment?.code!==match[1]||!known.team||message?.chat?.type!=='private'||String(message.chat.id)!==userId||user?.is_bot)return;
     const member=await call(token,'getChatMember',{chat_id:known.team.chat,user_id:user.id});
     if(!currentMember(member)){
-      await call(token,'sendMessage',{chat_id:userId,text:'Join the Incident Compass Telegram group first, then reopen the enrollment link. If you already joined, ask the group administrator to check the bot’s membership permissions.'});
+      await call(token,'sendMessage',{chat_id:userId,text:'Join the paired Telegram team group first, then reopen the Aurelis enrollment link. If you already joined, ask the group administrator to check the bot’s membership permissions.'});
       return;
     }
     const joined=known.people.find(person=>person.chat===userId);
@@ -363,7 +363,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},now=Date.now
     if(joined)joined.label=responderName(user);
     else known.people.push({id:randomUUID(),chat:userId,label:responderName(user),group:known.team.chat});
     await save(state);
-    await call(token,'sendMessage',{chat_id:userId,text:'✅ Private Incident Compass alerts are enabled for this chat. The on-call coordinator can now select you as a responder.'});
+    await call(token,'sendMessage',{chat_id:userId,text:'✅ Private Aurelis alerts are enabled for this chat. The on-call coordinator can now select you as a responder.'});
   }
   function teamButtons(state,route,claim) {
     const enrollment=state.connections[route.bot]?.enrollment;

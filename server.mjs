@@ -138,5 +138,5 @@ createServer(async (request,response)=>{
     else response.end();
   }
 }).listen(port,'127.0.0.1',()=>{
-  console.log(`Incident Compass · ${localOrigin} · ${key ? 'Gemini configured' : 'demo mode'}`);
+  console.log(`A U R E L I S · ${localOrigin} · ${key ? 'Gemini configured' : 'demo mode'}`);
 });
