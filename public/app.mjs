@@ -4,6 +4,7 @@ import {
   simulationSeverities, simulationStatuses, simulationTemplates, updateSimulation, validateReviewedResolution, validateSimulation,
 } from './simulations.mjs';
 import {demoReportEvents, durationLabel, exposureAssumptions, exposureAt, mergeIncidentWork, reportPeriod, reportSummary} from './reports.mjs';
+import {createImpactView} from './impact.mjs';
 
 const main = document.querySelector('#main');
 const dialog = document.querySelector('#dialog');
@@ -19,7 +20,7 @@ const entranceTimings = {
   menu:{duration:1200,motion:640,lead:70},
 };
 const tabs = [['brief','Brief'],['details','Case details'],['runbook','Runbooks'],['trace','Investigation log'],['replay','Time Machine'],['compare','Compare'],['family','Family tree']];
-const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','reports','chat'];
+const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','reports','impact','chat'];
 function byId(id,state = workspace) {
   const record = state.custom[id];
   if (!record) {
@@ -39,6 +40,7 @@ const investigateCase = (incident,snapshot = cutoff,state = workspace) =>
   investigate(incident,snapshot,reviewedArchive(state));
 const html = value => String(value ?? '').replace(/[&<>"']/g, char =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const impactView = createImpactView(html);
 const badge = level => `<span class="badge ${level}">${level}</span>`;
 const ref = id => `<button type="button" class="ref" data-source="${html(id)}">${html(id)}</button>`;
 const documentLink = document => `<button type="button" class="small doc-link" data-source="${html(document.id)}">${html(document.id)} · ${html(document.title)}</button>`;
@@ -335,6 +337,7 @@ function pageOnCall(state,incident) {
 }
 
 function tick() {
+  impactView.updateTimer();
   const latest = workspace;
   const now = Date.now();
   const due = latest.active.filter(id => latest.tasks[id]?.status === 'pending' && latest.tasks[id].until <= now);
@@ -1441,7 +1444,11 @@ function render() {
     history:()=>layout('Incident archive.','Compare previous causes, owners, priorities and documented fixes.',`<ul class="archive" id="list">${historyList()}</ul>`,true),
     runbooks:()=>layout('Runbook library.','Search the sample database for service procedures, recovery checks, and investigation guides.',`<ul class="archive" id="list">${documentList()}</ul>`,true)
   };
-  main.innerHTML = content[page]();
+  if (page === 'impact') {
+    if (pageChanged) main.replaceChildren(impactView.root);
+  } else {
+    main.innerHTML = content[page]();
+  }
   scheduleReportInsight();
   if (pageChanged) {
     const initial = renderedPage===undefined;
