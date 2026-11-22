@@ -100,6 +100,7 @@ const exposureWindows = new Map();
 let cutoff = '23:59';
 let query = '';
 let connected = false;
+let localPitchVoice = false;
 let checkingGemini = location.protocol.startsWith('http');
 let geminiStatusRequested = false;
 let analysisBusy = false;
@@ -137,7 +138,7 @@ const channelSetup = {
   telegram:{name:'Telegram',provider:'Telegram Bot API',setup:'https://t.me/BotFather',fields:[['TELEGRAM_BOT_TOKEN','BotFather token',true],['TELEGRAM_CHAT_ID','Chat ID or public channel username']]},
 };
 
-setupPitchVoice(pitchWindow, () => connected || checkingGemini);
+const refreshPitchVoices = setupPitchVoice(pitchWindow, () => connected || checkingGemini, () => localPitchVoice);
 document.querySelector('#pitch-qa').addEventListener('click', () => {
   if (assistantWindow.open) assistantWindow.close();
   pitchWindow.showModal();
@@ -2895,7 +2896,11 @@ function checkGeminiStatus() {
   geminiStatusRequested = true;
   fetch('/api/status',{signal:AbortSignal.timeout(5000)})
     .then(response=>response.json())
-    .then(status=>{connected = status.gemini===true;})
+    .then(status=>{
+      connected = status.gemini===true;
+      localPitchVoice = status.pitchVoice===true;
+      refreshPitchVoices();
+    })
     .catch(()=>{})
     .finally(()=>{
       checkingGemini = false;

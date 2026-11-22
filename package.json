@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",
-    "check": "node --check server.mjs && node --check incident-ai.mjs && node --check alerts.mjs && node --check telegram-routing.mjs && node --check public/app.mjs && node --check public/data.mjs && node --check public/simulations.mjs && node --check public/reports.mjs && node --check public/impact-cases.mjs && node --check public/impact.mjs && node --check public/pitch-qa.mjs && node --check public/pitch-voice.mjs",
+    "check": "node --check server.mjs && node --check incident-ai.mjs && node --check pitch-speech.mjs && node --check alerts.mjs && node --check telegram-routing.mjs && node --check public/app.mjs && node --check public/data.mjs && node --check public/simulations.mjs && node --check public/reports.mjs && node --check public/impact-cases.mjs && node --check public/impact.mjs && node --check public/pitch-qa.mjs && node --check public/pitch-voice.mjs",
     "test": "node --test"
   }
 }

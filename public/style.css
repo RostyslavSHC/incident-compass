@@ -286,6 +286,7 @@ dialog::backdrop {background:#1718128c}
 .pitch-caption-head h3 {margin:0}
 .pitch-voice-controls label {display:flex;align-items:center;gap:5px;font-size:.875rem}
 .pitch-voice-controls input {accent-color:var(--ink)}
+.pitch-voice-controls select {max-width:min(210px,54vw);padding-block:.25rem}
 #pitch-answer {margin:.7rem 0 0;font-size:clamp(1.08rem,2.75vw,1.35rem);line-height:1.5;overflow-wrap:anywhere}
 #pitch-mode {margin:.55rem 0 0}
 ::highlight(pitch-spoken) {background:#d7ed7e;color:#191a14}

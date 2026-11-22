@@ -2,6 +2,7 @@ import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {createIncidentAi} from './incident-ai.mjs';
 import {createAlertApi} from './alerts.mjs';
+import {createPitchSpeech} from './pitch-speech.mjs';
 
 const key = process.env.GEMINI_API_KEY?.trim();
 const model = process.env.GEMINI_MODEL?.trim() || 'gemini-3.1-flash-lite';
@@ -30,13 +31,19 @@ function json(response,status,data) {
 const alerts = createAlertApi({port,json});
 
 const incidentAi = createIncidentAi({key,model,localOrigin,json});
+const pitchSpeech = createPitchSpeech({
+  enabled:process.env.PITCH_KOKORO==='1', modulePath:process.env.PITCH_KOKORO_MODULE, localOrigin, json,
+});
 
 createServer(async (request,response)=>{
   try {
     const pathname = new URL(request.url,localOrigin).pathname;
-    if (request.method === 'GET' && pathname === '/api/status') return json(response,200,{gemini:Boolean(key)});
+    if (request.method === 'GET' && pathname === '/api/status') {
+      return json(response,200,{gemini:Boolean(key),pitchVoice:pitchSpeech.available()});
+    }
     if (request.method === 'POST' && pathname === '/api/report-analysis') return await incidentAi(request,response,'report');
     if (request.method === 'POST' && pathname === '/api/pitch-qa') return await incidentAi(request,response,'pitch');
+    if (request.method === 'POST' && pathname === '/api/pitch-audio') return await pitchSpeech.handle(request,response);
     if (request.method === 'POST' && ['/api/ask','/api/analysis','/api/resolution'].includes(pathname)) {
       return await incidentAi(request,response,pathname==='/api/resolution' ? 'resolution' : pathname==='/api/analysis');
     }
@@ -50,7 +57,7 @@ createServer(async (request,response)=>{
       'Cache-Control':'no-store',
       'X-Content-Type-Options':'nosniff',
       'Referrer-Policy':'same-origin',
-      'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
     });
     response.end(contents);
   } catch {
@@ -59,4 +66,5 @@ createServer(async (request,response)=>{
   }
 }).listen(port,'127.0.0.1',()=>{
   console.log(`A U R E L I S · ${localOrigin} · ${key ? 'Gemini configured' : 'demo mode'}`);
+  void pitchSpeech.warm();
 });
