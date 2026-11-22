@@ -17,6 +17,8 @@ const files = {
   '/data.mjs':['data.mjs','text/javascript; charset=utf-8'],
   '/simulations.mjs':['simulations.mjs','text/javascript; charset=utf-8'],
   '/reports.mjs':['reports.mjs','text/javascript; charset=utf-8'],
+  '/impact-cases.mjs':['impact-cases.mjs','text/javascript; charset=utf-8'],
+  '/impact.mjs':['impact.mjs','text/javascript; charset=utf-8'],
 };
 
 function json(response,status,data) {

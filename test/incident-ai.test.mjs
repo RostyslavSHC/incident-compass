@@ -63,6 +63,26 @@ test('the same route adapter supports custom follow-ups at the selected replay t
   assert.ok(context.availableEvidence.every(record=>record.seenAt<repeat.report.occurredAt));
 });
 
+test('the provider only receives historical records reviewed by the selected snapshot',async()=>{
+  const report = {...investigationTemplates[2],serviceVersion:'4.2.0'};
+  const previous = {id:'SIM-PREVIOUS',company:report.company,service:report.service,fingerprint:'INV_COMMIT_STALL',version:'4.2.0',
+    title:'Earlier commit stall',cause:'Import blocked a write.',fix:'Moved the import.',verification:'Writes returned to baseline.',
+    responder:'Test responder',resolvedAt:report.occurredAt-120_000,reviewedAt:report.occurredAt-60_000};
+  const late = {...previous,id:'SIM-LATE',reviewedAt:report.occurredAt+60_000};
+  const differentVersion = {...previous,id:'SIM-OLDER',version:'4.1.0'};
+  const otherCompany = {...previous,id:'SIM-OTHER',company:'Another Workspace'};
+  const {post,sent} = setup({answer:'Review the earlier write stall.',sources:[previous.id,late.id,differentVersion.id,otherCompany.id]});
+  const requested = {id:'SIM-REVIEW',report,question:'What did we know?',cutoff:report.occurredAt,
+    archive:[late,differentVersion,previous,otherCompany]};
+  const response = await post(requested,false);
+  assert.equal(response.status,200);
+  assert.deepEqual(response.body.sources,[previous.id,differentVersion.id]);
+  const {context} = JSON.parse(sent[0].contents[0].parts[0].text);
+  assert.deepEqual(context.applicableHistory,[previous.id]);
+  assert.equal(context.incident.knownFixSource,previous.id);
+  assert.ok(context.historicalComparison.every(record=>![late.id,otherCompany.id].includes(record.id)));
+});
+
 test('missing configuration, cross-origin requests, and invalid reports do not call Gemini',async()=>{
   const offline = setup(analysis,{key:''});
   assert.equal((await offline.post(repeat)).status,503);

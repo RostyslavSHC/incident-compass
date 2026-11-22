@@ -16,6 +16,12 @@ Open [http://127.0.0.1:4173](http://127.0.0.1:4173) in Chrome or Edge.
 
 Use `npm start` to launch the server, `npm run check` to check the source syntax, or `npm test` to run the tests. For a browser-only preview, open [demo/incident-compass.html](demo/incident-compass.html) locally.
 
+## Measure investigation impact
+
+Open **Measure impact** in the workspace menu, or go directly to `/#impact`. Select **Receive alert** to start a timed run. In **Manual**, inspect the logs, metrics, changes and incident history. In **With Aurelis**, the existing investigation engine generates a source-linked brief for a comparable HTTP 503 alert from the other fictional service. Both runs use the same decision criteria and stop only after the supported likely cause and first check are selected.
+
+The result shows each elapsed time, the difference and the number of attempts. For another round, swap which case goes with each mode. Use different participants and alternate which mode goes first when testing with a group. Runs are kept in the open tab and reset on reload. The exercise runs locally and creates no workspace incidents or deliveries. It measures time to a supported decision in the sample cases.
+
 ## Run the live demo
 
 Open **Incident simulator** from the workspace menu. Choose a template to edit it, use **Run now** for a single incident, or choose **Run all four severities** to demonstrate incoming alerts. To create your own event, fill in the form, preview the incident, and confirm. Schedule a trigger in the device’s local time. Incident timestamps in the workspace display Eastern Time.

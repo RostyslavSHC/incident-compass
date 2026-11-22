@@ -665,8 +665,12 @@ details[open] > :not(summary) {animation:unfold var(--fast) var(--ease) both}
 @keyframes loading-shift {to {background-position:-240% center}}
 @media(max-width:950px) {
   .nav-toggle {display:inline-block;margin-left:auto}
+  .top .brand {min-width:0;max-width:100%;white-space:normal}
+  .brand-copy {min-width:0}
+  .top:has(#nav-toggle[aria-expanded="true"]) {max-height:100dvh;overflow-y:auto}
   #workspace-nav {max-height:0;opacity:0;overflow:hidden;visibility:hidden;transition:max-height var(--motion) var(--ease),opacity var(--motion),visibility var(--motion);flex-wrap:wrap}
-  #nav-toggle[aria-expanded="true"] + #workspace-nav {max-height:15rem;opacity:1;visibility:visible;margin-top:.3rem}
+  #workspace-nav a {min-width:0;max-width:100%;white-space:normal}
+  #nav-toggle[aria-expanded="true"] + #workspace-nav {max-height:min(15rem,55dvh);overflow-y:auto;opacity:1;visibility:visible;margin-top:.3rem}
   .template-grid {grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:650px) {
@@ -679,6 +683,9 @@ details[open] > :not(summary) {animation:unfold var(--fast) var(--ease) both}
   #toast-stack {right:10px;bottom:10px;width:min(360px,calc(100% - 20px))}
   .toast-card:nth-last-child(n+3) .toast-copy p {display:none}
 }
+@media(max-width:950px) and (max-height:420px) {
+  .top {position:relative}
+}
 @media(max-width:420px) {
   .simulation-form,.dialog-body .simulation-form {grid-template-columns:1fr}
   .simulation-form .wide {grid-column:auto}
@@ -689,6 +696,58 @@ details[open] > :not(summary) {animation:unfold var(--fast) var(--ease) both}
   *,*::before,*::after {animation:none!important;transition:none!important;scroll-behavior:auto!important}
   main .awaiting-reveal {opacity:1}
   .toast-progress {display:none}
+}
+
+.impact-page {max-width:1120px;margin-inline:auto}
+.impact-hero h1 {font-size:clamp(2.65rem,7vw,5.3rem)}
+.impact-hero p {max-width:62ch;margin-bottom:0}
+.impact-modes,.impact-result-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.impact-modes {margin:18px 0}
+.impact-mode {display:grid;gap:2px;text-align:left;padding:.68rem .85rem}
+.impact-mode[aria-pressed="true"] {background:var(--ink);color:var(--paper)}
+.impact-mode[aria-pressed="true"] small {color:inherit}
+.impact-panel {padding:clamp(13px,2vw,24px);background:var(--sheet);overflow-wrap:anywhere}
+.impact-panel h2,.impact-alert h2 {margin:0 0 .35rem;line-height:1.16}
+.impact-start,.impact-results {padding-bottom:clamp(18px,2.5vw,30px)}
+.impact-start button,.impact-results button {margin-top:.45rem}
+.impact-alert {display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;
+  border:1px solid var(--ink);border-left:5px solid var(--red);background:var(--sheet);padding:clamp(13px,2vw,24px);margin-bottom:12px}
+.impact-alert .kicker {color:var(--red)}
+.impact-alert h2 {font:normal clamp(1.7rem,4vw,2.55rem)/1.05 var(--display);margin-top:.3rem;letter-spacing:-.045em}
+.impact-alert p {margin:0}
+.impact-clock {display:grid;align-items:center;justify-items:center;min-width:6rem;padding:.5rem .8rem;
+  border:1px solid var(--rule);background:var(--paper);font:600 .95rem var(--mono)}
+.impact-clock strong {font-size:1.55rem;font-variant-numeric:tabular-nums}
+.impact-columns {display:grid;grid-template-columns:minmax(0,1.38fr) minmax(0,1fr);gap:12px;align-items:start;
+  margin-bottom:24px}
+.impact-tabs {margin-top:.5rem}
+.impact-records {list-style:none;padding:0;margin:0}
+.impact-records li {padding:.76rem 0;border-bottom:1px solid var(--rule)}
+.impact-records li:last-child {border-bottom:0;padding-bottom:0}
+.impact-records p {margin-bottom:0}
+.impact-records li:focus {outline:2px solid var(--red);outline-offset:3px}
+.impact-brief,.impact-first-check {margin-top:.7rem}
+.impact-first-check {border-left:3px solid var(--green);background:var(--paper);padding:.6rem .7rem}
+.impact-brief details {margin:.7rem 0}
+.impact-brief summary {cursor:pointer;font-weight:650}
+#impact-form {display:grid;gap:.45rem;margin-top:.7rem}
+#impact-form label {font-size:.87rem;font-weight:700}
+#impact-form select {width:100%;margin-bottom:.35rem}
+#impact-form button {justify-self:start;margin-top:.3rem}
+.impact-feedback {font-size:.88rem;color:var(--red)}
+.impact-feedback:empty {margin:0}
+.impact-result-grid > div {border:1px solid var(--rule);padding:.75rem;min-width:0}
+.impact-result-grid dt {font-weight:700}
+.impact-result-grid dd {margin:0}
+.impact-result-time {font:normal clamp(1.8rem,4.5vw,3.25rem)/1.2 var(--display);font-variant-numeric:tabular-nums}
+.impact-outcome {font-size:1.08rem;font-weight:750}
+@media(max-width:760px) {
+  .impact-columns {grid-template-columns:1fr}
+  .impact-tabs {display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .impact-tabs .tab {white-space:normal;padding:.6rem .4rem;border:1px solid var(--rule)}
+}
+@media(max-width:420px) {
+  .impact-result-grid {grid-template-columns:1fr}
 }
 
 </style>
@@ -720,7 +779,7 @@ const companyKey = company=>companyLabel(company).toLowerCase();
 
 const history = [
   {id:'INC-096', date:'Oct 29', service:'Payments API', fingerprint:'PAY_CONN_RESET', title:'Timeouts after a configuration update', priority:'P2', responder:'Maya Chen', cause:'A checkout timeout was set too low.', fix:'Restored the previously validated timeout and verified checkout success.', runbook:'RB-013 · Validate payment recovery'},
-  {id:'INC-104', date:'Nov 06', service:'Identity Gateway', fingerprint:'JWKS_CACHE_MISS', title:'Login errors after key rotation', priority:'P2', responder:'Sam Rivera', cause:'The identity gateway cache held stale signing keys.', fix:'Refreshed the signing-key cache and confirmed successful sign-ins.', runbook:'RB-008 · Refresh identity cache'},
+  {id:'INC-104', date:'Nov 06', service:'Identity Gateway', version:'2.4.2', fingerprint:'JWKS_CACHE_MISS', title:'Login errors after key rotation', priority:'P2', responder:'Sam Rivera', cause:'The identity gateway cache held stale signing keys.', fix:'Refreshed the signing-key cache and confirmed successful sign-ins.', runbook:'RB-008 · Refresh identity cache'},
   {id:'INC-109', date:'Nov 09', service:'Payments API', fingerprint:'PAY_PROVIDER_429', title:'Provider rate limit during peak hours', priority:'P1', responder:'Priya Shah', cause:'The external provider throttled authorization requests.', fix:null, runbook:null},
   {id:'INC-087', date:'Oct 22', service:'Inventory Database', fingerprint:'POOL_EXHAUSTED', title:'Too many inventory connections', priority:'P2', responder:'Alex Morgan', cause:'A scheduled export filled the connection pool.', fix:'Rescheduled the export and verified the connection pool recovered.', runbook:'RB-017 · Check inventory connections'},
   {id:'INC-081', date:'Oct 16', service:'Image CDN', fingerprint:'CDN_CACHE_MISS', title:'Image requests taking longer', priority:'P3', responder:'Priya Shah', cause:'Cache warmup was incomplete.', fix:'Warmed the cache before shifting traffic.'},
@@ -873,7 +932,7 @@ const scenarios = [
     unknowns:['Whether the affected node can reach the issuer now.', 'Whether the current cache actually lacks the active key.', 'Whether any downstream portal or session checks failed.'],
     events:[
       {id:'CHG-81', time:'10:00', seen:'10:00', kind:'Change', title:'Signing keys rotated', detail:'Scheduled identity key rotation completed.'},
-      {id:'LOG-44', time:'10:08', seen:'10:08', kind:'Log', signature:'JWKS_CACHE_MISS', title:'JWKS_CACHE_MISS', detail:'A gateway node rejects requests signed with the newly active key.'},
+      {id:'LOG-44', time:'10:08', seen:'10:08', kind:'Log', signature:'JWKS_CACHE_MISS', affectedVersion:'2.4.2', title:'JWKS_CACHE_MISS', detail:'A gateway node rejects requests signed with the newly active key.'},
       {id:'ALT-25', time:'10:09', seen:'10:09', kind:'Alert', title:'Sign-in error rate reaches 9%', detail:'Failures cluster on one gateway node.'},
     ],
     cause:'A stale signing-key cache is likely on one gateway node.', causeSources:['LOG-44','INC-104'],
@@ -936,24 +995,38 @@ function extractErrorSignature(title,description) {
 
 function sampleAlertContext({title,description,service,occurredAt,company}) {
   const fingerprint = extractErrorSignature(title,description);
+  const scope = companyKey(company);
+  if (!scope || scope !== companyKey(sampleCompanyFor(service))) return {fingerprint,events:[]};
   const windowStart = occurredAt - 2 * 60 * 60_000;
-  const events = sampleTelemetry.filter(event=>event.service===service && (!companyKey(company) || companyKey(company)===companyKey(sampleCompanyFor(service))) && event.seenAt<=occurredAt &&
+  const events = sampleTelemetry.filter(event=>event.service===service && event.seenAt<=occurredAt &&
     event.timeAt>=windowStart && (event.kind!=='Log' || event.signature===fingerprint));
   return {fingerprint,events};
 }
 
 const runbookChecks = {
-  'RB-008':{verifiedAt:Date.parse('2026-11-06T17:00:00Z'),reviewer:'Sam Rivera',version:'2.4.1'},
+  'RB-008':{verifiedAt:Date.parse('2026-11-06T17:00:00Z'),reviewer:'Sam Rivera',version:'2.4.2'},
   'RB-013':{verifiedAt:Date.parse('2026-10-29T17:00:00Z'),reviewer:'Maya Chen',version:'2.7.4'},
   'RB-017':{verifiedAt:Date.parse('2026-10-22T17:00:00Z'),reviewer:'Alex Morgan',version:'4.2.0'},
 };
 
-function runbookFreshness(document, archive, currentVersion, now = Date.now()) {
-  const applied = archive.filter(record=>record.runbook===document.id).sort((a,b)=>b.resolvedAt-a.resolvedAt)[0];
-  const check = applied ? {verifiedAt:applied.resolvedAt,reviewer:applied.responder,version:applied.version} : runbookChecks[document.id];
+function reviewedAt(record) {
+  const timestamps = [record.resolvedAt, record.reviewedAt ?? record.resolvedAt, record.verifiedAt ?? record.resolvedAt];
+  return timestamps.every(Number.isFinite) ? Math.max(...timestamps) : Infinity;
+}
+
+function runbookFreshness(document, archive, currentVersion, now = Date.now(), company = sampleCompanyFor(document.service)) {
+  const scope = companyKey(company);
+  const sampleScope = companyKey(sampleCompanyFor(document.service));
+  const checks = scope ? archive.filter(record=>record.runbook===document.id && record.service===document.service && companyKey(record.company)===scope && reviewedAt(record)<=now)
+    .map(record=>({verifiedAt:reviewedAt(record),reviewer:record.responder,version:record.version})) : [];
+  const sampleCheck = runbookChecks[document.id];
+  if (scope && scope===sampleScope && sampleCheck?.verifiedAt<=now) checks.push(sampleCheck);
+  const check = checks.sort((a,b)=>Number(Boolean(currentVersion && b.version===currentVersion))-
+    Number(Boolean(currentVersion && a.version===currentVersion)) || b.verifiedAt-a.verifiedAt)[0];
   const reasons = [];
   if (!check) reasons.push('No successful use recorded.');
-  if (!check?.version) reasons.push('Verified service version unknown.');
+  if (check && !check.version) reasons.push('Verified service version unknown.');
+  if (currentVersion==='') reasons.push('Current service version unknown.');
   if (check?.version && currentVersion && check.version!==currentVersion) reasons.push(`Current version ${currentVersion} differs from verified version ${check.version}.`);
   if (check && now-check.verifiedAt>90*86_400_000) reasons.push('Last verified more than 90 days ago.');
   return {check,reasons};
@@ -962,9 +1035,10 @@ function runbookFreshness(document, archive, currentVersion, now = Date.now()) {
 const upstreamServices = {'Checkout':'Payments API','Order confirmation':'Payments API','Customer Portal':'Identity Gateway','Stock Sync':'Inventory Database'};
 
 function groupDuplicate(incident,candidates) {
-  if (!incident.fingerprint) return undefined;
+  const scope = companyKey(incident.company);
+  if (!scope || !incident.fingerprint) return undefined;
   return candidates.find(candidate=>candidate.id!==incident.id && !candidate.groupedUnder &&
-    companyKey(candidate.company)===companyKey(incident.company) &&
+    companyKey(candidate.company)===scope &&
     candidate.fingerprint===incident.fingerprint &&
     Math.abs(candidate.occurredAt-incident.occurredAt)<=5*60_000 &&
     (candidate.service===incident.service || upstreamServices[candidate.service]===incident.service ||
@@ -978,14 +1052,21 @@ function investigate(incident, cutoff = '23:59', archive = []) {
     : incident.events.filter(event=>event.seen<=cutoff).sort((a,b)=>a.seen.localeCompare(b.seen));
   const observed = sample ? incident.triggeredAt!==null && (cutoff==='23:59' || cutoff>=incident.occurredAt)
     : cutoff >= incident.alert;
-  const company = companyKey(incident.company);
-  const learned = cutoff==='23:59' ? archive.filter(record=>record.id!==incident.id && companyKey(record.company)===company &&
-    record.resolvedAt<=(incident.triggeredAt ?? Infinity)).sort((a,b)=>b.resolvedAt-a.resolvedAt) : [];
-  const sampleHistory = company ? history.filter(record=>companyKey(sampleCompanyFor(record.service))===company) : history;
+  const company = companyKey(incident.company ?? (sample ? '' : sampleCompanyFor(incident.service)));
+  const alertAt = sample ? incident.triggeredAt ?? incident.occurredAt : sampleMonitoringTime(incident.alert);
+  const snapshotAt = cutoff==='23:59' ? alertAt : typeof cutoff==='number' ? cutoff : sampleMonitoringTime(cutoff);
+  const archiveCutoff = Math.min(alertAt,snapshotAt);
+  const learned = company ? archive.filter(record=>record.id!==incident.id && companyKey(record.company)===company &&
+    reviewedAt(record)<=archiveCutoff).sort((a,b)=>reviewedAt(b)-reviewedAt(a)) : [];
+  const sampleHistory = company ? history.filter(record=>companyKey(sampleCompanyFor(record.service))===company &&
+    (runbookChecks[documents.find(document=>document.incident===record.id)?.id]?.verifiedAt ?? Date.parse(`${record.date} 2026 12:00 UTC`))<=archiveCutoff) : [];
   const comparable = observed ? [...learned,...sampleHistory].filter(record=>record.service===incident.service ||
     (incident.fingerprint && record.fingerprint===incident.fingerprint)) : [];
   const nearby = comparable.filter(record=>record.service===incident.service);
   const exact = nearby.filter(record=>incident.fingerprint && record.fingerprint===incident.fingerprint);
+  const applicable = exact.filter(record=>incident.serviceVersion && record.version===incident.serviceVersion);
+  const reusableFixes = applicable.filter(record=>record.fix);
+  const previous = applicable.find(record=>record.cause);
   const changes = evidence.filter(event => ['Change','Maintenance'].includes(event.kind));
   const logs = evidence.filter(event => ['Log','Metric'].includes(event.kind));
   const signals = evidence.filter(event => ['Alert','Ticket','Provider'].includes(event.kind));
@@ -995,10 +1076,9 @@ function investigate(incident, cutoff = '23:59', archive = []) {
     evidence.some(event => event.id === id) || nearby.some(record => record.id === id));
   const availableIds = new Set([...evidence,...nearby].map(item=>item.id));
   const findings = incident.findings.filter(finding=>finding.ids.every(id=>availableIds.has(id)));
-  const known = exact.find(record=>record.fix &&
-    (!record.resolvedAt || !record.version || !incident.serviceVersion || record.version===incident.serviceVersion));
+  const known = reusableFixes[0];
   const verifiedDocument = known && documents.find(document=>document.incident===known.id || document.id===known.runbook);
-  const release = sample && observed && changes.find(change=>change.version && logs.some(log=>
+  const release = sample && observed && changes.find(change=>change.version && (!incident.serviceVersion || change.version===incident.serviceVersion) && logs.some(log=>
     log.signature===incident.fingerprint && log.affectedVersion===change.version && log.timeAt>=change.timeAt));
   const releaseLog = release && logs.find(log=>log.signature===incident.fingerprint &&
     log.affectedVersion===release.version && log.timeAt>=release.timeAt);
@@ -1022,9 +1102,9 @@ function investigate(incident, cutoff = '23:59', archive = []) {
       cause = `The recent release ${release.version} is the leading cause. ${release.detail} ${releaseLog.detail}`;
       causeSources = [release.id,releaseLog.id];
       next = guide?.steps[0]?.[1] || 'Compare the same operation on the previous and current versions.';
-    } else if (exact[0]?.cause) {
-      cause = `Likely repeat of ${exact[0].id}. Prior cause: ${exact[0].cause} Confirm it against the current alert.`;
-      causeSources = [...incident.causeSources,exact[0].id,...logs.map(log=>log.id)];
+    } else if (previous) {
+      cause = `Likely repeat of ${previous.id}. Prior cause: ${previous.cause} Confirm it against the current alert.`;
+      causeSources = [...incident.causeSources,previous.id,...logs.map(log=>log.id)];
       next = guide?.steps[0]?.[1] || 'Confirm that the conditions of the previous incident match this alert.';
     } else {
       cause = 'The available evidence does not establish a likely cause.';
@@ -1040,24 +1120,26 @@ function investigate(incident, cutoff = '23:59', archive = []) {
       sameService ? 'Same service' : `Different service · ${record.service}`,
       sameSignature ? 'Same error signature' : incident.fingerprint ? 'Different error signature' : 'Current error signature unknown',
       record.fix ? 'Fix documented' : 'Fix missing',
-      versionDiffers && `Version ${record.version} differs from ${incident.serviceVersion}`
+      versionDiffers && `Version ${record.version} differs from ${incident.serviceVersion}`,
+      sameService && sameSignature && !record.version && 'Prior version unknown',
+      sameService && sameSignature && !incident.serviceVersion && 'Current version unknown',
     ].filter(Boolean)};
   });
   const challenger = release || alternative
     ? {claim:alternative ? incident.alternative : 'A shared upstream fault could also explain errors across versions.',
       check:'Compare the same operation and upstream route on both versions. Similar failures on the older version would weaken the release hypothesis.',
       sources:[alternative?.id,release?.id,releaseLog?.id].filter(Boolean)}
-    : exact[0]?.cause
+    : previous
       ? {claim:'The same error code can appear even when the previous cause is absent.',
         check:guide?.stopWhen || 'Check whether the confirmed cause from the previous record is present in the current logs. Its absence weakens the match.',
-        sources:[exact[0].id,...logs.map(event=>event.id)].slice(0,3)}
+        sources:[previous.id,...logs.map(event=>event.id)].slice(0,3)}
       : {claim:'The alert may coincide with a change while the affected operation fails elsewhere.',
         check:guide?.steps.find(([title])=>title.startsWith('Distinguish'))?.[1] ||
           'Compare a failing and a successful operation. If both use the changed component, check their other differences before attributing the failure.',
         sources:[...changes,...logs].slice(0,3).map(event=>event.id)};
-  const certainty = !ready || (sample && !release && !exact[0]?.cause) || incident.variant==='Unknown issue'
+  const certainty = !ready || (sample && !release && !previous) || incident.variant==='Unknown issue'
     ? 'Unknown' : 'Likely';
-  return {evidence, observed, nearby, exact, changes, alternative, ready, activity, relatedAlerts,
+  return {evidence, observed, nearby, exact, applicable, reusableFixes, archiveCutoff, changes, alternative, ready, activity, relatedAlerts,
     known, guide, relatedDocuments, verifiedDocument, findings, cause, causeSources, next, comparisons, challenger, certainty,
     verify:known?.verification || (sample && guide ? guide.verify : incident.verify)};
 }
@@ -1236,7 +1318,7 @@ function mergeIncidentWork(local,telegram) {
     }
     match.company ||= route.company;
     match.fingerprint ||= route.fingerprint;
-    if (hasTime(route.completedAt) && (!hasTime(match.closedAt) || route.completedAt<=match.closedAt)) {
+    if (hasTime(route.completedAt) && (!hasTime(match.closedAt) || route.completedAt<match.closedAt)) {
       Object.assign(match,{closedAt:route.completedAt,closedBy:route.completedBy,via:route.completedVia});
     }
     const matchingResponder=Boolean(match.closedBy && route.acceptedBy?.toLowerCase()===match.closedBy.toLowerCase());
@@ -1341,6 +1423,361 @@ function exposureAt({low,high,order},minutes) {
 }
 
 
+function buildIncident({id, title, company, service, owner, description, alert, fingerprint, serviceVersion, affectedPct, events}) {
+  const occurredAt = sampleMonitoringTime(alert);
+  const alertSource = `${id}-ALT`;
+  const sources = [...events, {id:alertSource, kind:'Alert', time:alert, title, detail:description, signature:fingerprint}];
+  return {
+    id, title, company, service, owner, description, alert, fingerprint, serviceVersion, affectedPct,
+    core:true, variant:'Impact comparison', sampleAlert:true, occurredAt, triggeredAt:occurredAt,
+    confirmed:[service], possible:[],
+    events:sources.map(source => ({...source, service, seen:source.time,
+      timeAt:sampleMonitoringTime(source.time), seenAt:sampleMonitoringTime(source.time)})),
+    causeSources:[alertSource], findings:[{text:description, ids:[alertSource]}],
+    unknowns:['Do the failed and healthy requests follow the same upstream route with comparable inputs?'],
+    next:'Compare the same operation on the previous and current versions.',
+    verify:'Check that HTTP 503 rates return to baseline on the same operation in both revision groups.',
+  };
+}
+
+const checkout = buildIncident({
+  id:'IMPACT-CHK-503', title:'Checkout HTTP 503 spike', company:'Bramble Market Lab', service:'Checkout', owner:'Maya Chen',
+  description:'The production checkout probe reports ORDER_SUBMIT_503 on new order submissions.',
+  alert:'09:55', fingerprint:'ORDER_SUBMIT_503', serviceVersion:'4.17.0', affectedPct:18.4,
+  events:[
+    {id:'IMPACT-CHK-DEP', kind:'Change', time:'09:44', title:'Checkout rollout', version:'4.17.0',
+      detail:'v4.17.0 began serving 50% of traffic. The release updated the time budget for payment routing.'},
+    {id:'IMPACT-CHK-LOG-1', kind:'Log', time:'09:49', title:'Checkout gateway request', signature:'ORDER_SUBMIT_503', affectedVersion:'4.17.0',
+      detail:'request=c-214 operation=POST /checkout/submit revision=4.17.0 status=503 duration_ms=1802 downstream=payment-router'},
+    {id:'IMPACT-CHK-LOG-2', kind:'Log', time:'09:49', title:'Checkout gateway request',
+      detail:'request=c-215 operation=POST /checkout/submit revision=4.16.2 status=201 duration_ms=215 downstream=payment-router'},
+    {id:'IMPACT-CHK-COPY', kind:'Change', time:'09:51', title:'Checkout help article published',
+      detail:'The publishing job updated the text on the public help article. No checkout configuration was changed.'},
+    {id:'IMPACT-CHK-PROBE', kind:'Metric', time:'09:53', title:'Inventory reservation probe',
+      detail:'100 of 100 reservation probes succeeded. p95 was 47 ms against a 50 ms baseline.'},
+    {id:'IMPACT-CHK-MET', kind:'Metric', time:'09:54', title:'HTTP 503 rates by deployed revision',
+      detail:'09:49–09:54 ET, POST /checkout/submit. v4.17.0: 92 of 500 (18.4%). v4.16.2: 2 of 500 (0.4%).'},
+  ],
+});
+
+const login = buildIncident({
+  id:'IMPACT-LGN-503', title:'Login HTTP 503 spike', company:'Tern Accounts Lab', service:'Identity Gateway', owner:'Sam Rivera',
+  description:'The production login probe reports SESSION_CREATE_503 while opening new sessions.',
+  alert:'11:45', fingerprint:'SESSION_CREATE_503', serviceVersion:'7.25.0', affectedPct:17.8,
+  events:[
+    {id:'IMPACT-LGN-DEP', kind:'Change', time:'11:34', title:'Identity Gateway rollout', version:'7.25.0',
+      detail:'v7.25.0 began serving 50% of traffic. The release updated the time budget for session signing.'},
+    {id:'IMPACT-LGN-LOG-1', kind:'Log', time:'11:39', title:'Login gateway request', signature:'SESSION_CREATE_503', affectedVersion:'7.25.0',
+      detail:'request=l-312 operation=POST /sessions revision=7.25.0 status=503 duration_ms=1757 downstream=session-signer'},
+    {id:'IMPACT-LGN-LOG-2', kind:'Log', time:'11:39', title:'Login gateway request',
+      detail:'request=l-313 operation=POST /sessions revision=7.24.1 status=201 duration_ms=207 downstream=session-signer'},
+    {id:'IMPACT-LGN-COPY', kind:'Change', time:'11:41', title:'Sign-in help article published',
+      detail:'The publishing job updated the text on the public help article. No sign-in configuration was changed.'},
+    {id:'IMPACT-LGN-PROBE', kind:'Metric', time:'11:43', title:'Identity directory probe',
+      detail:'100 of 100 directory lookup probes succeeded. p95 was 46 ms against a 50 ms baseline.'},
+    {id:'IMPACT-LGN-MET', kind:'Metric', time:'11:44', title:'HTTP 503 rates by deployed revision',
+      detail:'11:39–11:44 ET, POST /sessions. v7.25.0: 89 of 500 (17.8%). v7.24.1: 3 of 500 (0.6%).'},
+  ],
+});
+
+const impactCases = [
+  {
+    id:'checkout', incident:checkout,
+    archive:[{
+      id:'IMPACT-CHK-PAST', company:checkout.company, service:checkout.service, fingerprint:'RESERVATION_WAIT',
+      title:'Checkout returned 503 during inventory contention', date:'Nov 17', resolvedAt:Date.parse('2026-11-17T15:11:00Z'),
+      version:'4.12.8', responder:'Maya Chen', cause:'Inventory writes waited behind a long-running reservation.',
+      fix:'Cleared the blocked reservation and verified new orders completed.',
+    }],
+    causes:[
+      {id:'inventory', label:'Inventory reservation contention'},
+      {id:'checkout-copy', label:'Checkout help article publish'},
+      {id:'checkout-rollout', label:'Checkout v4.17.0 rollout'},
+    ],
+    checks:[
+      {id:'check-reservations', label:'Check inventory for blocked reservations'},
+      {id:'compare-checkout', label:'Compare checkout traces across revisions'},
+      {id:'review-checkout-copy', label:'Compare both checkout help articles'},
+    ],
+    correctCause:'checkout-rollout', correctCheck:'compare-checkout',
+  },
+  {
+    id:'login', incident:login,
+    archive:[{
+      id:'IMPACT-LGN-PAST', company:login.company, service:login.service, fingerprint:'DIRECTORY_WAIT',
+      title:'Login returned 503 during identity directory contention', date:'Nov 17', resolvedAt:Date.parse('2026-11-17T17:01:00Z'),
+      version:'7.19.3', responder:'Sam Rivera', cause:'Identity lookups waited behind a stalled directory replica.',
+      fix:'Redirected lookups to the healthy replica and verified new sessions opened.',
+    }],
+    causes:[
+      {id:'login-rollout', label:'Identity Gateway v7.25.0 rollout'},
+      {id:'directory', label:'Identity directory contention'},
+      {id:'login-copy', label:'Sign-in help article publish'},
+    ],
+    checks:[
+      {id:'review-login-copy', label:'Compare both sign-in help articles'},
+      {id:'check-directory', label:'Check identity directory replica health'},
+      {id:'compare-login', label:'Compare sign-in traces across revisions'},
+    ],
+    correctCause:'login-rollout', correctCheck:'compare-login',
+  },
+];
+
+
+function createImpactView(escape) {
+  const root = document.createElement('section');
+  root.className = 'page intro impact-page';
+  const modes = ['manual', 'assisted'];
+  const labels = {manual:'Manual',assisted:'With Aurelis'};
+  const sourceLabels = {telemetry:'Logs & metrics',changes:'Changes',history:'Incident history'};
+  let mode = 'manual';
+  let round = createRound(false);
+
+  function createRound(swapped) {
+    const cases = swapped ? [...impactCases].reverse() : impactCases;
+    return Object.fromEntries(modes.map((key,index) => [key,{
+      case:cases[index], startedAt:null, duration:null, attempts:0,
+      cause:'', check:'', panel:key==='manual' ? 'telemetry' : 'brief', analysis:null,
+    }]));
+  }
+
+  function time(ms, precise = false) {
+    const seconds = (precise ? Math.round(ms / 100) : Math.floor(ms / 1000) * 10) / 10;
+    if (seconds < 60) return `${precise ? seconds.toFixed(1) : seconds} s`;
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}:${(seconds % 60).toFixed(precise ? 1 : 0).padStart(precise ? 4 : 2,'0')}`;
+  }
+
+  const running = run => run.startedAt !== null && run.duration === null;
+  const complete = run => run.duration !== null;
+
+  function updateTimer() {
+    if (!root.isConnected || !running(round[mode])) return;
+    const clock = root.querySelector('[data-impact-clock]');
+    const text = time(performance.now() - round[mode].startedAt);
+    if (clock.textContent !== text) clock.textContent = text;
+  }
+
+  function sourceGroups({incident,archive}) {
+    return {
+      telemetry:incident.events.filter(item=>item.kind==='Log' || item.kind==='Metric'),
+      changes:incident.events.filter(item=>item.kind==='Change' || item.kind==='Maintenance'),
+      history:archive,
+    };
+  }
+
+  function sourceRows(records, group) {
+    return `<ul class="impact-records">${records.map(record=>`
+      <li data-impact-record="${escape(record.id)}" tabindex="-1">
+        <small class="mono quiet">${escape(record.id)} · ${escape(
+          group==='history' ? record.fingerprint : `${record.kind} · ${record.time} ET`
+        )}</small>
+        <h3>${escape(record.title)}</h3>
+        <p>${escape(group==='history' ? record.cause : record.detail)}</p>
+        ${group==='history' && record.fix ? `<p><strong>Recorded fix</strong> · ${escape(record.fix)}</p>` : ''}
+      </li>`).join('')}</ul>`;
+  }
+
+  function assistantBrief(analysis, groups) {
+    const sources = Object.values(groups).flat();
+    const links = [...new Set(analysis.causeSources)].flatMap(id=>{
+      const item = sources.find(record=>record.id===id);
+      return item ? [`<button type="button" class="ref" data-impact-source="${escape(id)}">${escape(id)}</button>`] : [];
+    });
+    return `<div class="impact-brief">
+      <h3>Likely cause</h3><p>${escape(analysis.cause)}</p>
+      ${links.length ? `<div class="references" aria-label="Supporting records">${links.join('')}</div>` : ''}
+      <div class="impact-first-check"><h3>First check</h3><p>${escape(analysis.next)}</p></div>
+      <details><summary>What could change this assessment?</summary>
+        <p>${escape(analysis.challenger.claim)}</p><p>${escape(analysis.challenger.check)}</p>
+      </details>
+      <small class="quiet">Generated by Aurelis from the records available when this alert fired.</small>
+    </div>`;
+  }
+
+  function sourcePanel(run) {
+    const groups = sourceGroups(run.snapshot);
+    const tabs = Object.entries(run.analysis ? {brief:'Aurelis brief',...sourceLabels} : sourceLabels);
+    return `<section class="panel impact-panel" aria-labelledby="impact-sources">
+      <h2 id="impact-sources">Investigation sources</h2>
+      <div class="tabs impact-tabs" role="group" aria-label="Evidence views">
+        ${tabs.map(([key,label])=>`<button type="button" class="tab" data-impact-panel="${key}"
+          aria-pressed="${run.panel===key}" aria-controls="impact-records">${label}</button>`).join('')}
+      </div>
+      <div id="impact-records">${run.panel==='brief' ? assistantBrief(run.analysis,groups) : sourceRows(groups[run.panel],run.panel)}</div>
+    </section>`;
+  }
+
+  function choices(name, label, items, selected) {
+    const options = items.map(({id,label})=>`<option value="${escape(id)}" ${id===selected ? 'selected' : ''}>${escape(label)}</option>`);
+    return `<label for="impact-${name}">${label}</label>
+      <select id="impact-${name}" name="${name}" required>
+        <option value="">Choose ${name==='cause' ? 'a likely cause' : 'a first check'}</option>${options.join('')}
+      </select>`;
+  }
+
+  function investigation(run) {
+    const {incident,causes,checks} = run.case;
+    return `<section class="impact-alert">
+      <div><span class="kicker">HTTP 503 · ${escape(incident.service)}</span>
+        <h2 id="impact-stage" tabindex="-1">${escape(incident.title)}</h2>
+        <p>${escape(incident.description)}</p>
+      </div>
+      <div class="impact-clock"><small>Elapsed</small><strong role="timer" aria-label="Elapsed investigation time" data-impact-clock>${time(performance.now()-run.startedAt)}</strong></div>
+    </section>
+    <div class="impact-columns">
+      ${sourcePanel(run)}
+      <section class="panel impact-panel" aria-labelledby="impact-decision">
+        <h2 id="impact-decision">Record your decision</h2>
+        <p class="quiet">Choose the likely cause and the first check you would run.</p>
+        <form id="impact-form">
+          ${choices('cause','Likely cause',causes,run.cause)}
+          ${choices('check','First check',checks,run.check)}
+          <p class="impact-feedback" role="alert">${run.attempts ? 'Review the evidence and try another combination. The timer is still running.' : ''}</p>
+          <button type="submit" class="primary">Confirm decision</button>
+        </form>
+      </section>
+    </div>`;
+  }
+
+  function modeControls() {
+    const active = modes.some(key=>running(round[key]));
+    return `<div class="impact-modes" role="group" aria-label="Investigation mode">
+      ${modes.map(key=>{
+        const run = round[key];
+        const status = complete(run) ? `Complete · ${time(run.duration,true)}` : running(run) ? 'In progress' : 'Ready';
+        return `<button type="button" class="impact-mode" data-impact-mode="${key}" aria-pressed="${key===mode}"
+          ${active && key!==mode ? 'disabled' : ''}><strong>${labels[key]}</strong><small>${status}</small></button>`;
+      }).join('')}
+    </div>`;
+  }
+
+  function nextStage(run) {
+    if (complete(run)) {
+      const next = modes.find(key=>key!==mode);
+      const action = next==='assisted' ? 'Continue with Aurelis' : 'Continue to manual investigation';
+      return `<section class="panel impact-panel impact-start">
+        <h2 id="impact-stage" tabindex="-1">Decision confirmed in ${time(run.duration,true)}</h2>
+        <p>Continue to a comparable alert using the other investigation mode.</p>
+        <button type="button" class="primary" data-impact-mode="${next}">${action}</button>
+      </section>`;
+    }
+    const guidance = mode==='manual'
+      ? 'Review the logs, recent changes and history before recording your decision.'
+      : 'Review the automatic Aurelis brief and follow its evidence before recording your decision.';
+    return `<section class="panel impact-panel impact-start">
+      <h2 id="impact-stage" tabindex="-1">Ready for the ${mode==='manual' ? 'manual' : 'assisted'} run</h2>
+      <p>${guidance}</p>
+      <button type="button" class="primary" data-impact-start>Receive alert</button>
+    </section>`;
+  }
+
+  function results() {
+    const {manual,assisted} = round;
+    const delta = manual.duration - assisted.duration;
+    const difference = Math.round(Math.abs(delta)/100)*100;
+    const outcome = difference===0 ? 'The runs finished within 0.1 seconds of each other.'
+      : `${delta>0 ? 'The assisted run' : 'The manual run'} finished ${time(difference,true)} sooner in this round.`;
+    return `<section class="panel impact-panel impact-results">
+      <h2 id="impact-stage" tabindex="-1">Time to a supported decision</h2>
+      <dl class="impact-result-grid">
+        ${modes.map(key=>{
+          const run = round[key];
+          return `<div><dt>${labels[key]} · ${escape(run.case.incident.service)}</dt>
+            <dd class="impact-result-time">${time(run.duration,true)}</dd>
+            <dd>${run.attempts===1 ? 'Correct on the first attempt' : `Correct after ${run.attempts} attempts`}</dd>
+          </div>`;
+        }).join('')}
+      </dl>
+      <p class="impact-outcome">${outcome}</p>
+      <p class="quiet">One participant and two fictional alerts. Run order, practice and case difficulty can affect the result. This measures time to a correct decision during the exercise.</p>
+      <button type="button" class="primary" data-impact-swap>Swap cases for a new round</button>
+    </section>`;
+  }
+
+  function render() {
+    const run = round[mode];
+    const done = modes.every(key=>complete(round[key]));
+    root.innerHTML = `<header class="page-hero impact-hero"><div>
+      <h1>Measure investigation impact</h1>
+      <p>Compare two fictional HTTP 503 alerts. The timer runs from alert receipt until you choose the supported cause and first check.</p>
+    </div></header>
+      ${done ? '' : modeControls()}
+      ${done ? results() : running(run) ? investigation(run) : nextStage(run)}`;
+  }
+
+  function focusStage() {
+    const heading = root.querySelector('#impact-stage');
+    heading.focus({preventScroll:true});
+    const header = root.closest('.frame')?.querySelector('.top');
+    const headerBottom = header && getComputedStyle(header).position==='sticky'
+      ? Math.max(0, header.getBoundingClientRect().bottom) : 0;
+    const {top,bottom} = heading.getBoundingClientRect();
+    if (top<headerBottom+8 || bottom>window.innerHeight) {
+      window.scrollBy({top:top-headerBottom-8,behavior:'instant'});
+    }
+  }
+
+  root.addEventListener('change',event=>{
+    if (event.target.form?.id==='impact-form') round[mode][event.target.name] = event.target.value;
+  });
+
+  root.addEventListener('submit',event=>{
+    if (event.target.id!=='impact-form') return;
+    event.preventDefault();
+    const run = round[mode];
+    if (!running(run)) return;
+    const decision = new FormData(event.target);
+    run.attempts++;
+    if (decision.get('cause')!==run.case.correctCause || decision.get('check')!==run.case.correctCheck) {
+      root.querySelector('.impact-feedback').textContent = 'Review the evidence and try another combination. The timer is still running.';
+      return;
+    }
+    run.duration = performance.now() - run.startedAt;
+    render();
+    focusStage();
+  });
+
+  root.addEventListener('click',event=>{
+    const control = event.target.closest('button');
+    if (!control) return;
+    const {impactMode,impactPanel,impactSource} = control.dataset;
+    const run = round[mode];
+    if (impactPanel || impactSource) {
+      const group = impactPanel || Object.entries(sourceGroups(run.snapshot))
+        .find(([,items])=>items.some(item=>item.id===impactSource))?.[0];
+      if (!group || !running(run)) return;
+      run.panel = group;
+      render();
+      const target = impactSource ? `[data-impact-record="${CSS.escape(impactSource)}"]` : `[data-impact-panel="${group}"]`;
+      root.querySelector(target)?.focus();
+    } else if (impactMode && !running(run)) {
+      mode = impactMode;
+      render();
+      root.querySelector('.impact-mode[aria-pressed="true"]')?.focus();
+    } else if (control.hasAttribute('data-impact-start') && run.startedAt===null) {
+      run.startedAt = performance.now();
+      const {incident,archive} = run.case;
+      run.snapshot = {
+        incident:{...incident,events:incident.events.filter(item=>item.seenAt<=incident.occurredAt)},
+        archive:archive.filter(record=>record.resolvedAt<=incident.occurredAt),
+      };
+      if (mode==='assisted') run.analysis = investigate(run.snapshot.incident,'23:59',run.snapshot.archive);
+      render();
+      focusStage();
+    } else if (control.hasAttribute('data-impact-swap') && modes.every(key=>complete(round[key]))) {
+      round = createRound(round.manual.case===impactCases[0]);
+      mode = 'manual';
+      render();
+      focusStage();
+    }
+  });
+
+  render();
+  return {root, updateTimer};
+}
+
+
 const main = document.querySelector('#main');
 const dialog = document.querySelector('#dialog');
 const assistantWindow = document.querySelector('#assistant-window');
@@ -1348,14 +1785,17 @@ const persona = document.querySelector('#persona');
 const personaMenu = document.querySelector('#persona-menu');
 const personaName = document.querySelector('#persona-name');
 const night = document.querySelector('#night');
+const navToggle = document.querySelector('#nav-toggle');
+const workspaceNav = document.querySelector('#workspace-nav');
 const saveKey = 'incident-compass-workspace-v1';
+const analysisSchema = 2;
 const windowMs = 30_000;
 const entranceTimings = {
   startup:{duration:2000,motion:1100,lead:160},
   menu:{duration:1200,motion:640,lead:70},
 };
 const tabs = [['brief','Brief'],['details','Case details'],['runbook','Runbooks'],['trace','Investigation log'],['replay','Time Machine'],['compare','Compare'],['family','Family tree']];
-const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','reports','chat'];
+const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','reports','impact','chat'];
 function byId(id,state = workspace) {
   const record = state.custom[id];
   if (!record) {
@@ -1375,6 +1815,7 @@ const investigateCase = (incident,snapshot = cutoff,state = workspace) =>
   investigate(incident,snapshot,reviewedArchive(state));
 const html = value => String(value ?? '').replace(/[&<>"']/g, char =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const impactView = createImpactView(html);
 const badge = level => `<span class="badge ${level}">${level}</span>`;
 const ref = id => `<button type="button" class="ref" data-source="${html(id)}">${html(id)}</button>`;
 const documentLink = document => `<button type="button" class="small doc-link" data-source="${html(document.id)}">${html(document.id)} · ${html(document.title)}</button>`;
@@ -1399,6 +1840,9 @@ function initial() {
 function read() {
   try {
     const state = {...initial(), ...JSON.parse(localStorage.getItem(saveKey))};
+    for (const [id, analysis] of Object.entries(state.analyses)) {
+      if (analysis?.status==='ready' && analysis.schema!==analysisSchema) state.analyses[id] = {status:'queued',revision:analysis.revision};
+    }
     state.notifications = state.notifications.map((entry,index)=>({
       key:`legacy-${entry.time}-${index}`,read:false,...entry
     }));
@@ -1429,6 +1873,7 @@ let cutoff = '23:59';
 let query = '';
 let connected = false;
 let checkingGemini = location.protocol.startsWith('http');
+let geminiStatusRequested = false;
 let analysisBusy = false;
 let analysisCooldown = 0;
 const toastQueue = [];
@@ -1704,6 +2149,7 @@ function pageOnCall(state,incident) {
 }
 
 function tick() {
+  impactView.updateTimer();
   const latest = workspace;
   const now = Date.now();
   const due = latest.active.filter(id => latest.tasks[id]?.status === 'pending' && latest.tasks[id].until <= now);
@@ -1730,11 +2176,10 @@ function tick() {
   if (now>=reportSyncAt) void syncReportEvents();
 }
 
-function aiIncidentPayload(incident,state = workspace) {
+function aiIncidentPayload(incident,state = workspace,snapshot = '23:59') {
   const {id,title,description,service,company,occurredAt,triggeredAt,level,serviceVersion} = incident;
-  const archive = reviewedArchive(state).filter(record=>record.service===service && companyKey(record.company)===companyKey(company))
-    .sort((a,b)=>Number(b.fingerprint===incident.fingerprint)-Number(a.fingerprint===incident.fingerprint) ||
-      b.resolvedAt-a.resolvedAt).slice(0,3);
+  const {nearby,applicable} = investigateCase(incident,snapshot,state);
+  const archive = [...new Set([...applicable,...nearby])].filter(record=>Number.isFinite(record.resolvedAt)).slice(0,3);
   const grouped = incident.sampleAlert ? incident.events
     .filter(event=>event.kind==='Alert' && event.id!==id+'-alert').slice(0,3)
     .map(event=>({...event,detail:event.detail.slice(0,400)})) : [];
@@ -1743,7 +2188,7 @@ function aiIncidentPayload(incident,state = workspace) {
 }
 
 async function runNextAnalysis() {
-  if (!connected || analysisBusy || Date.now()<analysisCooldown) return;
+  if (view()==='impact' || !connected || analysisBusy || Date.now()<analysisCooldown) return;
   const requested = byId(selected);
   const foreground = view()==='desk' && activeTab==='brief' && cutoff==='23:59' && requested && requested.triggeredAt!==null;
   const id = foreground && (!workspace.analyses[selected] || workspace.analyses[selected].status==='queued')
@@ -1751,6 +2196,7 @@ async function runNextAnalysis() {
   if (!id) return;
   analysisBusy = true;
   const analyze = async ()=>{
+    if (view()==='impact') return;
     const state = read();
     const incident = byId(id,state);
     const existing = state.analyses[id];
@@ -1763,7 +2209,7 @@ async function runNextAnalysis() {
       });
       if (response.status===429) analysisCooldown = Date.now()+60_000;
       if (!response.ok) throw Error();
-      analysis = {status:'ready',...await response.json()};
+      analysis = {...await response.json(),status:'ready',schema:analysisSchema};
     } catch {
       analysis = {status:'unavailable'};
     }
@@ -1789,6 +2235,7 @@ function actionOnTask(action, id) {
     if (!state.active.includes(id)) return;
     const task = state.tasks[id];
     if (action === 'page' && !task && incidentPriority(incident,state) === 'P1') {
+      startNextPreparedRun(incident,state,Date.now());
       pageOnCall(state,incident);
       return `Urgent page sent to ${incident.owner} in this demo.`;
     }
@@ -1804,7 +2251,9 @@ function actionOnTask(action, id) {
     const canClaim = action === 'claim' && task?.status === 'open';
     const canPickUp = action==='accept' && !task && incidentPriority(incident,state)!=='P1';
     if (canAccept || canClaim || canPickUp) {
-      state.tasks[id] = {status:'claimed',by:performer,acceptedAt:Date.now()};
+      const acceptedAt = Date.now();
+      startNextPreparedRun(incident,state,acceptedAt);
+      state.tasks[id] = {status:'claimed',by:performer,acceptedAt};
       notification(state,id,'Ownership confirmed',`${performer} accepted the task.`);
       if (canClaim) state.messages.push({id, type:'claim', by:performer, time:Date.now()});
       return `${performer} accepted ownership of ${id}.`;
@@ -1849,8 +2298,10 @@ function automaticAnalysis(incident) {
     ${content}</section>`;
 }
 
-function freshnessPanel(document, currentVersion, archive = cutoff==='23:59' ? reviewedArchive() : []) {
-  const {check,reasons} = runbookFreshness(document,archive,currentVersion);
+function freshnessPanel(document, incident, result) {
+  const company = incident ? incident.company ?? '' : sampleCompanyFor(document.service);
+  const version = incident?.service===document.service ? incident.serviceVersion ?? '' : undefined;
+  const {check,reasons} = runbookFreshness(document,incident ? reviewedArchive() : [],version,result?.archiveCutoff,company);
   return `<div class="runbook-check block">
     <span class="badge neutral">${reasons.length?'Review before use':'Verification recorded'}</span>
     <p class="small">${check ? `Last verified ${html(formatIncidentTime(check.verifiedAt))} by ${html(check.reviewer)} · Version ${html(check.version || 'unknown')}.` : 'No verification is recorded for this procedure.'}</p>
@@ -1929,14 +2380,15 @@ function brief(incident, result) {
       <div class="panel"><div class="kicker">Known fix</div><h3>${result.known ? html(result.known.fix) : 'No known fix for this alert'}</h3>
       <p class="quiet">${result.known ? `Documented by ${html(result.known.responder)} in ${html(result.known.id)}.` : 'The archive has no verified fix applicable to this alert and version.'}</p>
       ${historical ? ref(result.known?.id || historical.id) : ''}
-      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}${freshnessPanel(result.verifiedDocument,incident.serviceVersion)}</div>` : ''}</div>
+      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}${freshnessPanel(result.verifiedDocument,incident,result)}</div>` : ''}</div>
       <div class="panel"><div class="kicker">Key uncertainty</div><h3>${html(incident.unknowns[0])}</h3><button class="small" data-tab="family">Open incident family tree</button></div>
     </div>
-    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}${freshnessPanel(result.guide,incident.serviceVersion)}</div>` : ''}
+    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}${freshnessPanel(result.guide,incident,result)}</div>` : ''}
     <div class="duo block">
       <div class="panel"><div class="kicker">Recent changes</div><ul class="archive">${result.changes.map(change => `<li><strong>${html(change.title)}</strong><br><small>${change.time} ET</small> ${ref(change.id)}</li>`).join('') || '<li>No relevant change recorded in this snapshot.</li>'}</ul></div>
       ${incident.sampleAlert ? `<div class="panel"><div class="kicker">Related past incidents</div><ul class="archive">${result.nearby.map(record=>
-        `<li><strong>${html(record.title)}</strong> ${ref(record.id)}<br><small>${result.exact.includes(record) ? 'Matching error signature' : 'Same service · Different error signature'}</small></li>`
+        `<li><strong>${html(record.title)}</strong> ${ref(record.id)}<br><small>${result.applicable.includes(record) ? 'Same error signature and version' : result.exact.includes(record)
+          ? 'Same error signature · Version differs or is unknown' : 'Same service · Different error signature'}</small></li>`
       ).join('') || '<li>No past incident recorded for this service.</li>'}</ul></div>` :
       `<div class="panel"><div class="kicker">Impact and priority</div><h3>${incidentPriority(incident)} · ${incident.affectedPct}% of monitored operations affected</h3>
       <p>Confirmed: ${incident.confirmed.join(', ')}.<br>Possible downstream impact: ${incident.possible.join(', ')}.</p>
@@ -1967,11 +2419,13 @@ function caseDetails(incident,result) {
 function incidentRunbooks(incident,result) {
   if (!result.observed) return '<p>The alert had not fired at this point in the replay.</p>';
   const guide = result.guide;
-  return `<div class="lead"><h3>${result.verifiedDocument ? 'Procedure linked to the matching past fix' : 'No verified fix for this error signature'}</h3>
-    <p>${result.verifiedDocument ? 'Check the runbook preconditions against the current evidence before following it.' : 'The documentation below can help you investigate or compare this alert with a different case.'}</p></div>
+  return `<div class="lead"><h3>${result.verifiedDocument ? 'Procedure linked to the matching past fix' : result.known
+    ? 'Matching fix has no linked runbook' : 'No verified fix for this alert and version'}</h3>
+    <p>${result.verifiedDocument ? 'Check the runbook preconditions against the current evidence before following it.' : result.known
+      ? 'Review the documented fix in the incident archive.' : 'The documentation below can help you investigate or compare this alert with a different case.'}</p></div>
     ${guide ? `<section class="panel block"><div class="kicker">${html(guide.kind)}</div><h3>${html(guide.title)}</h3><p>${html(guide.useWhen)}</p>
     <ol class="archive">${guide.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
-    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}${freshnessPanel(guide,incident.serviceVersion)}</section>` : ''}
+    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}${freshnessPanel(guide,incident,result)}</section>` : ''}
     ${result.relatedDocuments.length ? `<section class="panel block"><h3>Related archive documentation</h3><p>Compare the preconditions and error signature before using a procedure from another incident.</p><div class="references">${result.relatedDocuments.map(documentLink).join('')}</div></section>` : ''}`;
 }
 
@@ -2204,7 +2658,8 @@ async function createSimulationBatch(values,batch,localOnly) {
     const inputs = values.map(item=>validateSimulation(item,serviceNames,now));
     if (Object.keys(state.custom).length+inputs.length > 100) throw Error('This workspace holds up to 100 custom simulations. Delete a test event or reset the simulator.');
     for (const input of inputs) {
-      const id = 'SIM-' + crypto.randomUUID().split('-').at(-1).toUpperCase();
+      // Challenge feed IDs also fall outside the Telegram router's sendable ID format.
+      const id = (localOnly ? 'SIM-LOCAL' : 'SIM-') + crypto.randomUUID().split('-').at(-1).toUpperCase();
       const record = createSimulation(input,actor,now,id);
       if (localOnly) record.localOnly = true;
       state.custom[id] = record;
@@ -2265,7 +2720,7 @@ function openResolution(id,level,note = '',priorityReason = '') {
   const incident = byId(id);
   if (!incident || incident.triggeredAt===null) return;
   const current = workspace.resolutions[id];
-  const matching = investigateCase(incident,'23:59').exact.filter(record=>record.fix);
+  const matching = investigateCase(incident,'23:59').reusableFixes;
   const runbooks = documents.filter(document=>document.service===incident.service);
   openDialog(id,'Resolve incident',`
     <p>${html(incident.title)}</p>
@@ -2330,6 +2785,26 @@ function incidentWork(incident,state) {
     level:incidentPriority(incident,state),...localAcceptance};
 }
 
+function reportRowFromResolution(incident,row,saved) {
+  if (Number.isFinite(saved?.resolvedAt) && saved.resolvedAt>=row.openedAt) {
+    return {...row,closedAt:saved.resolvedAt,closedBy:saved.responder,via:'website',verified:true,fix:saved.fix};
+  }
+  if (incident.status!=='resolved') return undefined;
+  const event=incident.activity.findLast(item=>item.status==='Resolved' && item.time>=row.openedAt);
+  if (event) return {...row,closedAt:event.time,closedBy:event.who,via:'website'};
+}
+
+function startNextPreparedRun(incident,state,now) {
+  const {id} = incident;
+  if (state.custom[id]) return;
+  const timing = incidentWork(incident,state);
+  const previous = state.workHistory[timing.key] ?? reportRowFromResolution(incident,timing,state.resolutions[id]);
+  if (!Number.isFinite(previous?.closedAt)) return;
+  state.workHistory[timing.key] ??= previous;
+  state.arrivals[id] = now;
+  delete state.tasks[id];
+}
+
 function localReportEvents(state = workspace) {
   const rows = new Map(Object.entries(state.workHistory));
   for (const id of [...new Set([...state.active,...Object.keys(state.resolutions),...Object.keys(state.custom)])]) {
@@ -2337,14 +2812,7 @@ function localReportEvents(state = workspace) {
     if (!incident || incident.triggeredAt===null || incident.groupedUnder) continue;
     const row=incidentWork(incident,state);
     if (rows.has(row.key)) continue;
-    const saved=!state.active.includes(id) && state.resolutions[id];
-    if (saved?.resolvedAt>=row.openedAt) {
-      Object.assign(row,{closedAt:saved.resolvedAt,closedBy:saved.responder,via:'website',verified:true,fix:saved.fix});
-    } else if (incident.status==='resolved') {
-      const event=incident.activity.findLast(item=>item.status==='Resolved' && item.time>row.openedAt);
-      if (event) Object.assign(row,{closedAt:event.time,closedBy:event.who,via:'website'});
-    }
-    rows.set(row.key,row);
+    rows.set(row.key,reportRowFromResolution(incident,row,state.resolutions[id]) ?? row);
   }
   return [...rows.values()];
 }
@@ -2375,7 +2843,9 @@ async function syncReportEvents() {
   try {
     const sent=[];
     for (const [key,job] of Object.entries(workspace.reportOutbox).slice(0,5)) {
-      await deliveryApi('telegram-complete',job,AbortSignal.timeout(8000));
+      if (!workspace.custom[job.incident]?.localOnly) {
+        await deliveryApi('telegram-complete',job,AbortSignal.timeout(8000));
+      }
       sent.push(key);
     }
     const result=await deliveryApi('telegram-report-events',undefined,AbortSignal.timeout(6000));
@@ -2400,8 +2870,11 @@ function saveResolution(state,id,fields,who,now) {
     throw Error('Choose a runbook for this service.');
   }
   const custom = state.custom[id];
+  const active = state.active.includes(id);
+  if (active) startNextPreparedRun(incident,state,now);
   const timing = incidentWork(incident,state);
-  const previous = state.workHistory[timing.key];
+  const stored = state.workHistory[timing.key];
+  const previous = stored ?? (active ? undefined : reportRowFromResolution(incident,timing,state.resolutions[id]));
   const closedAt = previous?.closedAt || now;
   const closedBy = previous?.closedBy || who;
   const level = custom && Object.hasOwn(simulationSeverities,fields.level) ? fields.level : incidentPriority(incident,state);
@@ -2409,7 +2882,9 @@ function saveResolution(state,id,fields,who,now) {
   state.resolutions[id] = {...reviewed,id,title:incident.title,service:incident.service,company:incident.company,
     fingerprint:incident.fingerprint,priority:level,responder:closedBy,resolvedAt:closedAt,reviewedAt:now};
   state.workHistory[timing.key] = {...timing,...previous,level,closedAt,closedBy,via:previous?.via || 'website',verified:true,fix:reviewed.fix};
-  if (!previous && location.protocol.startsWith('http')) state.reportOutbox[timing.key] = {incident:id,openedAt:timing.openedAt,completedAt:closedAt,who};
+  if (!stored && !custom?.localOnly && location.protocol.startsWith('http')) {
+    state.reportOutbox[timing.key] = {incident:id,openedAt:timing.openedAt,completedAt:closedAt,who};
+  }
   for (const record of Object.values(state.custom).filter(item=>item.id===id || item.groupedUnder===id)) {
     updateSimulation(record,{status:'resolved',level:record.id===id ? level : record.level,
       note:record.id===id ? reviewed.fix : `Resolved with ${id}.`},closedBy,now);
@@ -2559,7 +3034,9 @@ function reportData() {
   if (includeSampleReports) entries.push(...demoReportEvents);
   const companyOptions=[...new Map(entries.map(row=>[companyKey(row.company),companyLabel(row.company)||'Unassigned'])).entries()]
     .sort((a,b)=>a[1].localeCompare(b[1]));
-  const selectedCompany=reportCompany===null ? 'All companies' : companyOptions.find(([key])=>key===reportCompany)?.[1] || 'Unassigned';
+  const selection=companyOptions.find(([key])=>key===reportCompany);
+  if (!selection) reportCompany=null;
+  const selectedCompany=selection?.[1] || 'All companies';
   const summary=reportSummary(reportCompany===null ? entries : entries.filter(row=>companyKey(row.company)===reportCompany),period);
   const {opened,resolved,companies,repeated,buckets,mttr,timed}=summary;
   const sampleIncidents=new Set([...opened,...resolved].filter(row=>row.via==='sample').map(row=>row.key)).size;
@@ -2709,8 +3186,12 @@ function documentList() {
   `).join('') || '<li>No procedures match the filter.</li>';
 }
 function calendar() {
-  const recent = scenarios.flatMap(incident=>incident.events.filter(event=>['Change','Maintenance'].includes(event.kind)).map(event=>({...event,service:incident.service}))).sort((a,b)=>b.time.localeCompare(a.time));
   const monthCodes = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const [monitoringYear,monitoringMonth,monitoringDay] = sampleMonitoringDate.split('-').map(Number);
+  const recent = scenarios.flatMap(incident=>incident.events.filter(event=>['Change','Maintenance'].includes(event.kind)).map(event=>({
+    ...event,service:incident.service,date:`${monthCodes[monitoringMonth-1]} ${monitoringDay}`,
+    month:monitoringYear*12+monitoringMonth-1,day:monitoringDay,
+  })));
   const dayFormat = new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit'});
   const simulated = Object.values(workspace.custom).map(record=>{
     const timestamp = record.triggeredAt ?? record.scheduledAt;
@@ -2720,9 +3201,8 @@ function calendar() {
   });
   const records = [
     ...history.map(record=>({...record,kind:'Archived incident'})),
-    ...recent.map(record=>({...record,date:'Nov 21'})),
     ...upcoming,
-  ].map(record=>({...record,month:2026*12+monthCodes.indexOf(record.date.slice(0,3)),day:Number(record.date.slice(4))}));
+  ].map(record=>({...record,month:2026*12+monthCodes.indexOf(record.date.slice(0,3)),day:Number(record.date.slice(4))})).concat(recent);
   const year = Math.floor(calendarMonth/12);
   const month = calendarMonth%12;
   const monthTitle = value=>new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',month:'long',year:'numeric'}).format(new Date(Date.UTC(Math.floor(value/12),value%12,1)));
@@ -2775,7 +3255,7 @@ function alertCards(incidents = openIncidents()) {
       <h2>${html(incident.title)}</h2><p>${html(incident.service)} · ${custom ? html(incident.type) : incident.affectedPct+'% affected in sample'}</p>
       <div class="references alert-sources" aria-label="Source alerts">${alerts.map(event=>ref(event.id)).join('')}</div>
       <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button>
-      <button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button>
+      ${custom?.localOnly ? '' : `<button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button>`}
       ${custom ? '' : `<button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button>`}</div></div></li>`;
   }).join('') || '<li>No alerts match these filters.</li>';
 }
@@ -2811,7 +3291,11 @@ function render() {
     history:()=>layout('Incident archive.','Compare previous causes, owners, priorities and documented fixes.',`<ul class="archive" id="list">${historyList()}</ul>`,true),
     runbooks:()=>layout('Runbook library.','Search the sample database for service procedures, recovery checks, and investigation guides.',`<ul class="archive" id="list">${documentList()}</ul>`,true)
   };
-  main.innerHTML = content[page]();
+  if (page === 'impact') {
+    if (pageChanged) main.replaceChildren(impactView.root);
+  } else {
+    main.innerHTML = content[page]();
+  }
   scheduleReportInsight();
   if (pageChanged) {
     const initial = renderedPage===undefined;
@@ -2940,19 +3424,25 @@ function openDialog(kicker,title,content) {
   else dialog.querySelector('[data-close]').focus({preventScroll:true});
 }
 function source(id) {
+  const incident = view()==='desk' ? byId(selected) : undefined;
+  const result = incident ? investigateCase(incident) : undefined;
   const document = documents.find(item=>item.id===id);
   if (document) {
+    const linked = document.incident && (!result || result.comparisons.some(({record})=>record.id===document.incident));
     openDialog(document.kind + ' / ' + id,document.title,`
       <p><small>${html(document.service)} · Owner: ${html(document.owner)} · Updated ${html(document.updated)} · Sample database</small></p>
       <p><strong>When to use it</strong><br>${html(document.useWhen)}</p>
       <ol class="archive">${document.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
       <p><strong>When to pause</strong><br>${html(document.stopWhen)}</p>
       <p><strong>How to verify recovery</strong><br>${html(document.verify)}</p>
-      ${document.incident ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}
-      ${freshnessPanel(document,byId(selected)?.service===document.service ? byId(selected).serviceVersion : undefined)}`);
+      ${linked ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}
+      ${freshnessPanel(document,incident,result)}`);
     return;
   }
-  const record = reviewedArchive().find(item=>item.id===id) || history.find(item=>item.id===id);
+  const archivedCase = incident?.id===id && cutoff==='23:59' && !workspace.active.includes(id)
+    ? workspace.resolutions[id] : undefined;
+  const record = result ? result.comparisons.find(({record})=>record.id===id)?.record || archivedCase
+    : reviewedArchive().find(item=>item.id===id) || history.find(item=>item.id===id);
   if (record) {
     const procedure = documents.find(item=>item.incident===record.id || item.id===record.runbook);
     openDialog('Incident archive / ' + id,record.title,`<p>${html(record.service)} · ${html(record.resolvedAt ? formatIncidentTime(record.resolvedAt) : record.date)} · ${record.priority} · ${html(record.responder)}</p>
@@ -2963,8 +3453,9 @@ function source(id) {
       ${procedure ? `<div class="block">${documentLink(procedure)}</div>` : '<p class="quiet">No runbook is linked to this archive record.</p>'}`);
     return;
   }
-  const event = byId(selected)?.events.find(item=>item.id===id) ||
-    [...scenarios,...Object.values(workspace.custom).map(asInvestigation)].flatMap(item=>item.events).find(item=>item.id===id);
+  const event = result ? result.evidence.find(item=>item.id===id)
+    : scenarios.flatMap(item=>item.events).find(item=>item.id===id) ||
+      Object.values(workspace.custom).flatMap(item=>asInvestigation(item).events).find(item=>item.id===id);
   if (event) openDialog(event.kind + ' / ' + id,event.title,`<p>${html(event.detail)}</p>
     <p class="mono">Occurred ${snapshotLabel(event.timeAt ?? event.time)} · Available ${snapshotLabel(event.seenAt ?? event.seen)}</p>`);
 }
@@ -3509,6 +4000,10 @@ async function reviewTelegramRoute(id) {
 }
 
 async function openTelegramNotice(incidentId='',recipient='') {
+  if (workspace.custom[incidentId]?.localOnly) {
+    notice('Challenge feed alerts stay in the workspace.','error');
+    return;
+  }
   openDialog('Telegram delivery','Send Telegram notification','<p data-delivery-status role="status">Loading paired recipients…</p>');
   const target=dialog.querySelector('[data-delivery-status]');
   try {
@@ -3517,7 +4012,7 @@ async function openTelegramNotice(incidentId='',recipient='') {
     const recipients=info.team||info.people.length;
     const incidentOptions = items=>items.map(incident=>`<option value="${incident.id}" ${incident.id===incidentId?'selected':''}>
       ${incidentPriority(incident)} · ${html(incident.title)}</option>`).join('');
-    const tests = Object.values(workspace.custom).filter(incident=>incident.triggeredAt!==null);
+    const tests = Object.values(workspace.custom).filter(incident=>incident.triggeredAt!==null && !incident.localOnly);
     openDialog('Telegram delivery','Send Telegram notification',`
       <p>Choose the team group for one post, or choose a private responder to request acknowledgement with a deadline. Custom incidents are labeled as test events.</p>
       <form class="delivery-form" data-telegram-notice-form>
@@ -3793,7 +4288,7 @@ function fallback(incident,result,question) {
     return [intro,`[${guide.id}] ${guide.title}`,...guide.steps.map(([name,step],index)=>`${index+1}. ${name}: ${step}`),`Pause if: ${guide.stopWhen}`,`Verify: ${guide.verify}`].join('\n\n');
   }
   if (/priorit|urgent|first|impact|cost|money/.test(q)) {
-    return `${incident.title} is ${priority(incident)}. The monitor shows ${incident.affectedPct}% of operations affected. Confirmed: ${incident.confirmed.join(', ')}. Check first: ${incident.next}`;
+    return `${incident.title} is ${incidentPriority(incident)}. The monitor shows ${incident.affectedPct}% of operations affected. Confirmed: ${incident.confirmed.join(', ')}. Check first: ${incident.next}`;
   }
   if (/before|past|similar|fix|compar/.test(q)) {
     const record = result.exact[0] || result.nearby[0];
@@ -3863,7 +4358,7 @@ async function ask(question, speak = false) {
     try {
       const earlierQuestions = conversation.map(turn=>turn.question);
       const response = await fetch('/api/ask', {method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({...aiIncidentPayload(incident),cutoff:snapshot,question,earlierQuestions})});
+        body:JSON.stringify({...aiIncidentPayload(incident,workspace,snapshot),cutoff:snapshot,question,earlierQuestions})});
       if (!response.ok) throw Error();
       const data = await response.json();
       reply = data.answer;
@@ -3959,11 +4454,13 @@ document.addEventListener('click',event=>{
     const incident = byId(data.trigger);
     choose(incident.id);
     void update(state=>{
+      const now=Date.now();
+      startNextPreparedRun(incident,state,now);
       if (!state.active.includes(incident.id)) {
         state.active.push(incident.id);
-        state.arrivals[incident.id]=Date.now();
+        state.arrivals[incident.id]=now;
         delete state.tasks[incident.id];
-      } else if (!state.tasks[incident.id]?.acceptedAt) state.arrivals[incident.id] ??= Date.now();
+      } else if (!state.tasks[incident.id]?.acceptedAt) state.arrivals[incident.id] ??= now;
       state.analyses[incident.id] ??= {status:'queued'};
       notification(state,incident.id,'Sample alert received',incident.title);
       if (incidentPriority(incident,state)==='P1' && !state.tasks[incident.id]) pageOnCall(state,incident);
@@ -4249,12 +4746,17 @@ document.addEventListener('submit',event=>{
     const id=form.elements.incident.value;
     const recipient=form.elements.recipient.value;
     const record=workspace.custom[id];
+    const incident=byId(id);
+    const target=form.querySelector('[data-delivery-status]');
+    if (!incident || record?.localOnly || record?.triggeredAt===null) {
+      target.textContent='Choose an incident available for Telegram delivery.';
+      return;
+    }
     const simulation=record ? simulationPayload(record) : undefined;
     const button=form.querySelector('[type=submit]');
-    const target=form.querySelector('[data-delivery-status]');
     button.disabled=true;
     target.textContent='Preparing the Telegram notification…';
-    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(byId(id)),recipient,simulation}).then(result=>{
+    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(incident),recipient,simulation}).then(result=>{
       if(target.isConnected&&dialog.open)showTelegramNotice(result,recipient);
     },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
     return;
@@ -4363,7 +4865,7 @@ document.addEventListener('change',event=>{
   if (event.target.matches('[data-resolution-template]')) {
     const form = event.target.form;
     const incident = byId(form.dataset.resolutionForm);
-    const previous = investigateCase(incident,'23:59').exact.find(record=>record.id===event.target.value);
+    const previous = investigateCase(incident,'23:59').reusableFixes.find(record=>record.id===event.target.value);
     if (previous) {
       form.elements.cause.value = previous.cause || '';
       form.elements.fix.value = previous.fix || '';
@@ -4479,22 +4981,9 @@ window.addEventListener('storage',event=>{
   discardRemovedToasts();
   queueToasts(workspace.notifications.filter(entry=>!before.has(entry.key)).reverse());
 });
-window.addEventListener('hashchange',()=>{
-  if (location.hash==='#main') return;
-  document.querySelector('#nav-toggle').setAttribute('aria-expanded','false');
-  if (view()!==renderedPage) window.scrollTo({top:0,behavior:'instant'});
-  query=''; render(); main.focus({preventScroll:true});
-});
-document.querySelector('#nav-toggle').addEventListener('click',event=>{
-  const control = event.currentTarget;
-  control.setAttribute('aria-expanded',String(control.getAttribute('aria-expanded')!=='true'));
-});
-document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault(); main.focus();});
-window.addEventListener('focus',refreshAutomaticIndicator);
-refreshAutomaticIndicator();
-tick();
-setInterval(tick,500);
-if (checkingGemini) {
+function checkGeminiStatus() {
+  if (!checkingGemini || geminiStatusRequested || view()==='impact') return;
+  geminiStatusRequested = true;
   fetch('/api/status',{signal:AbortSignal.timeout(5000)})
     .then(response=>response.json())
     .then(status=>{connected = status.gemini===true;})
@@ -4505,6 +4994,39 @@ if (checkingGemini) {
       void runNextAnalysis();
     });
 }
+
+function closeWorkspaceMenu(returnFocus = false) {
+  if (navToggle.getAttribute('aria-expanded')!=='true') return;
+  navToggle.setAttribute('aria-expanded','false');
+  if (returnFocus && navToggle.getClientRects().length) navToggle.focus();
+}
+
+window.addEventListener('hashchange',()=>{
+  if (location.hash==='#main') return;
+  closeWorkspaceMenu();
+  if (view()!==renderedPage) window.scrollTo({top:0,behavior:'instant'});
+  query=''; render(); main.focus({preventScroll:true});
+  checkGeminiStatus();
+});
+navToggle.addEventListener('click',()=>{
+  navToggle.setAttribute('aria-expanded',String(navToggle.getAttribute('aria-expanded')!=='true'));
+});
+workspaceNav.addEventListener('click',event=>{
+  const link = event.target.closest('a[data-view]');
+  if (link) closeWorkspaceMenu(link.hash===location.hash);
+});
+document.addEventListener('keydown',event=>{
+  if (event.key!=='Escape' || event.defaultPrevented || navToggle.getAttribute('aria-expanded')!=='true' ||
+      !navToggle.getClientRects().length || dialog.open || assistantWindow.open || personaMenu.matches(':popover-open')) return;
+  event.preventDefault();
+  closeWorkspaceMenu(true);
+});
+document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault(); main.focus();});
+window.addEventListener('focus',refreshAutomaticIndicator);
+refreshAutomaticIndicator();
+tick();
+setInterval(tick,500);
+checkGeminiStatus();
 render();
 </script>
 </head>
@@ -4525,6 +5047,7 @@ render();
         <a href="#runbooks" data-view="runbooks">Runbooks</a>
         <a href="#calendar" data-view="calendar">Calendar</a>
         <a href="#reports" data-view="reports">Reports</a>
+        <a href="#impact" data-view="impact">Measure impact</a>
         <a href="#chat" data-view="chat"># General <span id="chat-count" hidden></span></a>
       </nav>
       <div class="top-right">

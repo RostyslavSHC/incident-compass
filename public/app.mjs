@@ -4,6 +4,7 @@ import {
   simulationSeverities, simulationStatuses, simulationTemplates, updateSimulation, validateReviewedResolution, validateSimulation,
 } from './simulations.mjs';
 import {acceptedIncidentWork, demoReportEvents, durationLabel, exposureAssumptions, exposureAt, mergeIncidentWork, reportPeriod, reportSummary} from './reports.mjs';
+import {createImpactView} from './impact.mjs';
 
 const main = document.querySelector('#main');
 const dialog = document.querySelector('#dialog');
@@ -12,14 +13,17 @@ const persona = document.querySelector('#persona');
 const personaMenu = document.querySelector('#persona-menu');
 const personaName = document.querySelector('#persona-name');
 const night = document.querySelector('#night');
+const navToggle = document.querySelector('#nav-toggle');
+const workspaceNav = document.querySelector('#workspace-nav');
 const saveKey = 'incident-compass-workspace-v1';
+const analysisSchema = 2;
 const windowMs = 30_000;
 const entranceTimings = {
   startup:{duration:2000,motion:1100,lead:160},
   menu:{duration:1200,motion:640,lead:70},
 };
 const tabs = [['brief','Brief'],['details','Case details'],['runbook','Runbooks'],['trace','Investigation log'],['replay','Time Machine'],['compare','Compare'],['family','Family tree']];
-const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','reports','chat'];
+const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','reports','impact','chat'];
 function byId(id,state = workspace) {
   const record = state.custom[id];
   if (!record) {
@@ -39,6 +43,7 @@ const investigateCase = (incident,snapshot = cutoff,state = workspace) =>
   investigate(incident,snapshot,reviewedArchive(state));
 const html = value => String(value ?? '').replace(/[&<>"']/g, char =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const impactView = createImpactView(html);
 const badge = level => `<span class="badge ${level}">${level}</span>`;
 const ref = id => `<button type="button" class="ref" data-source="${html(id)}">${html(id)}</button>`;
 const documentLink = document => `<button type="button" class="small doc-link" data-source="${html(document.id)}">${html(document.id)} · ${html(document.title)}</button>`;
@@ -63,6 +68,9 @@ function initial() {
 function read() {
   try {
     const state = {...initial(), ...JSON.parse(localStorage.getItem(saveKey))};
+    for (const [id, analysis] of Object.entries(state.analyses)) {
+      if (analysis?.status==='ready' && analysis.schema!==analysisSchema) state.analyses[id] = {status:'queued',revision:analysis.revision};
+    }
     state.notifications = state.notifications.map((entry,index)=>({
       key:`legacy-${entry.time}-${index}`,read:false,...entry
     }));
@@ -93,6 +101,7 @@ let cutoff = '23:59';
 let query = '';
 let connected = false;
 let checkingGemini = location.protocol.startsWith('http');
+let geminiStatusRequested = false;
 let analysisBusy = false;
 let analysisCooldown = 0;
 const toastQueue = [];
@@ -368,6 +377,7 @@ function pageOnCall(state,incident) {
 }
 
 function tick() {
+  impactView.updateTimer();
   const latest = workspace;
   const now = Date.now();
   const due = latest.active.filter(id => latest.tasks[id]?.status === 'pending' && latest.tasks[id].until <= now);
@@ -394,11 +404,10 @@ function tick() {
   if (now>=reportSyncAt) void syncReportEvents();
 }
 
-function aiIncidentPayload(incident,state = workspace) {
+function aiIncidentPayload(incident,state = workspace,snapshot = '23:59') {
   const {id,title,description,service,company,occurredAt,triggeredAt,level,serviceVersion} = incident;
-  const archive = reviewedArchive(state).filter(record=>record.service===service && companyKey(record.company)===companyKey(company))
-    .sort((a,b)=>Number(b.fingerprint===incident.fingerprint)-Number(a.fingerprint===incident.fingerprint) ||
-      b.resolvedAt-a.resolvedAt).slice(0,3);
+  const {nearby,applicable} = investigateCase(incident,snapshot,state);
+  const archive = [...new Set([...applicable,...nearby])].filter(record=>Number.isFinite(record.resolvedAt)).slice(0,3);
   const grouped = incident.sampleAlert ? incident.events
     .filter(event=>event.kind==='Alert' && event.id!==id+'-alert').slice(0,3)
     .map(event=>({...event,detail:event.detail.slice(0,400)})) : [];
@@ -407,7 +416,7 @@ function aiIncidentPayload(incident,state = workspace) {
 }
 
 async function runNextAnalysis() {
-  if (!connected || analysisBusy || Date.now()<analysisCooldown) return;
+  if (view()==='impact' || !connected || analysisBusy || Date.now()<analysisCooldown) return;
   const requested = byId(selected);
   const foreground = view()==='desk' && activeTab==='brief' && cutoff==='23:59' && requested && requested.triggeredAt!==null;
   const id = foreground && (!workspace.analyses[selected] || workspace.analyses[selected].status==='queued')
@@ -415,6 +424,7 @@ async function runNextAnalysis() {
   if (!id) return;
   analysisBusy = true;
   const analyze = async ()=>{
+    if (view()==='impact') return;
     const state = read();
     const incident = byId(id,state);
     const existing = state.analyses[id];
@@ -427,7 +437,7 @@ async function runNextAnalysis() {
       });
       if (response.status===429) analysisCooldown = Date.now()+60_000;
       if (!response.ok) throw Error();
-      analysis = {status:'ready',...await response.json()};
+      analysis = {...await response.json(),status:'ready',schema:analysisSchema};
     } catch {
       analysis = {status:'unavailable'};
     }
@@ -453,6 +463,7 @@ function actionOnTask(action, id) {
     if (!state.active.includes(id)) return;
     const task = state.tasks[id];
     if (action === 'page' && !task && incidentPriority(incident,state) === 'P1') {
+      startNextPreparedRun(incident,state,Date.now());
       pageOnCall(state,incident);
       return `Urgent page sent to ${incident.owner} in this demo.`;
     }
@@ -468,7 +479,9 @@ function actionOnTask(action, id) {
     const canClaim = action === 'claim' && task?.status === 'open';
     const canPickUp = action==='accept' && !task && incidentPriority(incident,state)!=='P1';
     if (canAccept || canClaim || canPickUp) {
-      state.tasks[id] = {status:'claimed',by:performer,acceptedAt:Date.now()};
+      const acceptedAt = Date.now();
+      startNextPreparedRun(incident,state,acceptedAt);
+      state.tasks[id] = {status:'claimed',by:performer,acceptedAt};
       notification(state,id,'Ownership confirmed',`${performer} accepted the task.`);
       if (canClaim) state.messages.push({id, type:'claim', by:performer, time:Date.now()});
       return `${performer} accepted ownership of ${id}.`;
@@ -513,8 +526,10 @@ function automaticAnalysis(incident) {
     ${content}</section>`;
 }
 
-function freshnessPanel(document, currentVersion, archive = cutoff==='23:59' ? reviewedArchive() : []) {
-  const {check,reasons} = runbookFreshness(document,archive,currentVersion);
+function freshnessPanel(document, incident, result) {
+  const company = incident ? incident.company ?? '' : sampleCompanyFor(document.service);
+  const version = incident?.service===document.service ? incident.serviceVersion ?? '' : undefined;
+  const {check,reasons} = runbookFreshness(document,incident ? reviewedArchive() : [],version,result?.archiveCutoff,company);
   return `<div class="runbook-check block">
     <span class="badge neutral">${reasons.length?'Review before use':'Verification recorded'}</span>
     <p class="small">${check ? `Last verified ${html(formatIncidentTime(check.verifiedAt))} by ${html(check.reviewer)} · Version ${html(check.version || 'unknown')}.` : 'No verification is recorded for this procedure.'}</p>
@@ -593,14 +608,15 @@ function brief(incident, result) {
       <div class="panel"><div class="kicker">Known fix</div><h3>${result.known ? html(result.known.fix) : 'No known fix for this alert'}</h3>
       <p class="quiet">${result.known ? `Documented by ${html(result.known.responder)} in ${html(result.known.id)}.` : 'The archive has no verified fix applicable to this alert and version.'}</p>
       ${historical ? ref(result.known?.id || historical.id) : ''}
-      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}${freshnessPanel(result.verifiedDocument,incident.serviceVersion)}</div>` : ''}</div>
+      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}${freshnessPanel(result.verifiedDocument,incident,result)}</div>` : ''}</div>
       <div class="panel"><div class="kicker">Key uncertainty</div><h3>${html(incident.unknowns[0])}</h3><button class="small" data-tab="family">Open incident family tree</button></div>
     </div>
-    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}${freshnessPanel(result.guide,incident.serviceVersion)}</div>` : ''}
+    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}${freshnessPanel(result.guide,incident,result)}</div>` : ''}
     <div class="duo block">
       <div class="panel"><div class="kicker">Recent changes</div><ul class="archive">${result.changes.map(change => `<li><strong>${html(change.title)}</strong><br><small>${change.time} ET</small> ${ref(change.id)}</li>`).join('') || '<li>No relevant change recorded in this snapshot.</li>'}</ul></div>
       ${incident.sampleAlert ? `<div class="panel"><div class="kicker">Related past incidents</div><ul class="archive">${result.nearby.map(record=>
-        `<li><strong>${html(record.title)}</strong> ${ref(record.id)}<br><small>${result.exact.includes(record) ? 'Matching error signature' : 'Same service · Different error signature'}</small></li>`
+        `<li><strong>${html(record.title)}</strong> ${ref(record.id)}<br><small>${result.applicable.includes(record) ? 'Same error signature and version' : result.exact.includes(record)
+          ? 'Same error signature · Version differs or is unknown' : 'Same service · Different error signature'}</small></li>`
       ).join('') || '<li>No past incident recorded for this service.</li>'}</ul></div>` :
       `<div class="panel"><div class="kicker">Impact and priority</div><h3>${incidentPriority(incident)} · ${incident.affectedPct}% of monitored operations affected</h3>
       <p>Confirmed: ${incident.confirmed.join(', ')}.<br>Possible downstream impact: ${incident.possible.join(', ')}.</p>
@@ -631,11 +647,13 @@ function caseDetails(incident,result) {
 function incidentRunbooks(incident,result) {
   if (!result.observed) return '<p>The alert had not fired at this point in the replay.</p>';
   const guide = result.guide;
-  return `<div class="lead"><h3>${result.verifiedDocument ? 'Procedure linked to the matching past fix' : 'No verified fix for this error signature'}</h3>
-    <p>${result.verifiedDocument ? 'Check the runbook preconditions against the current evidence before following it.' : 'The documentation below can help you investigate or compare this alert with a different case.'}</p></div>
+  return `<div class="lead"><h3>${result.verifiedDocument ? 'Procedure linked to the matching past fix' : result.known
+    ? 'Matching fix has no linked runbook' : 'No verified fix for this alert and version'}</h3>
+    <p>${result.verifiedDocument ? 'Check the runbook preconditions against the current evidence before following it.' : result.known
+      ? 'Review the documented fix in the incident archive.' : 'The documentation below can help you investigate or compare this alert with a different case.'}</p></div>
     ${guide ? `<section class="panel block"><div class="kicker">${html(guide.kind)}</div><h3>${html(guide.title)}</h3><p>${html(guide.useWhen)}</p>
     <ol class="archive">${guide.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
-    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}${freshnessPanel(guide,incident.serviceVersion)}</section>` : ''}
+    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}${freshnessPanel(guide,incident,result)}</section>` : ''}
     ${result.relatedDocuments.length ? `<section class="panel block"><h3>Related archive documentation</h3><p>Compare the preconditions and error signature before using a procedure from another incident.</p><div class="references">${result.relatedDocuments.map(documentLink).join('')}</div></section>` : ''}`;
 }
 
@@ -868,7 +886,8 @@ async function createSimulationBatch(values,batch,localOnly) {
     const inputs = values.map(item=>validateSimulation(item,serviceNames,now));
     if (Object.keys(state.custom).length+inputs.length > 100) throw Error('This workspace holds up to 100 custom simulations. Delete a test event or reset the simulator.');
     for (const input of inputs) {
-      const id = 'SIM-' + crypto.randomUUID().split('-').at(-1).toUpperCase();
+      // Challenge feed IDs also fall outside the Telegram router's sendable ID format.
+      const id = (localOnly ? 'SIM-LOCAL' : 'SIM-') + crypto.randomUUID().split('-').at(-1).toUpperCase();
       const record = createSimulation(input,actor,now,id);
       if (localOnly) record.localOnly = true;
       state.custom[id] = record;
@@ -929,7 +948,7 @@ function openResolution(id,level,note = '',priorityReason = '') {
   const incident = byId(id);
   if (!incident || incident.triggeredAt===null) return;
   const current = workspace.resolutions[id];
-  const matching = investigateCase(incident,'23:59').exact.filter(record=>record.fix);
+  const matching = investigateCase(incident,'23:59').reusableFixes;
   const runbooks = documents.filter(document=>document.service===incident.service);
   openDialog(id,'Resolve incident',`
     <p>${html(incident.title)}</p>
@@ -994,6 +1013,26 @@ function incidentWork(incident,state) {
     level:incidentPriority(incident,state),...localAcceptance};
 }
 
+function reportRowFromResolution(incident,row,saved) {
+  if (Number.isFinite(saved?.resolvedAt) && saved.resolvedAt>=row.openedAt) {
+    return {...row,closedAt:saved.resolvedAt,closedBy:saved.responder,via:'website',verified:true,fix:saved.fix};
+  }
+  if (incident.status!=='resolved') return undefined;
+  const event=incident.activity.findLast(item=>item.status==='Resolved' && item.time>=row.openedAt);
+  if (event) return {...row,closedAt:event.time,closedBy:event.who,via:'website'};
+}
+
+function startNextPreparedRun(incident,state,now) {
+  const {id} = incident;
+  if (state.custom[id]) return;
+  const timing = incidentWork(incident,state);
+  const previous = state.workHistory[timing.key] ?? reportRowFromResolution(incident,timing,state.resolutions[id]);
+  if (!Number.isFinite(previous?.closedAt)) return;
+  state.workHistory[timing.key] ??= previous;
+  state.arrivals[id] = now;
+  delete state.tasks[id];
+}
+
 function localReportEvents(state = workspace) {
   const rows = new Map(Object.entries(state.workHistory));
   for (const id of [...new Set([...state.active,...Object.keys(state.resolutions),...Object.keys(state.custom)])]) {
@@ -1001,14 +1040,7 @@ function localReportEvents(state = workspace) {
     if (!incident || incident.triggeredAt===null || incident.groupedUnder) continue;
     const row=incidentWork(incident,state);
     if (rows.has(row.key)) continue;
-    const saved=!state.active.includes(id) && state.resolutions[id];
-    if (saved?.resolvedAt>=row.openedAt) {
-      Object.assign(row,{closedAt:saved.resolvedAt,closedBy:saved.responder,via:'website',verified:true,fix:saved.fix});
-    } else if (incident.status==='resolved') {
-      const event=incident.activity.findLast(item=>item.status==='Resolved' && item.time>row.openedAt);
-      if (event) Object.assign(row,{closedAt:event.time,closedBy:event.who,via:'website'});
-    }
-    rows.set(row.key,row);
+    rows.set(row.key,reportRowFromResolution(incident,row,state.resolutions[id]) ?? row);
   }
   return [...rows.values()];
 }
@@ -1039,7 +1071,9 @@ async function syncReportEvents() {
   try {
     const sent=[];
     for (const [key,job] of Object.entries(workspace.reportOutbox).slice(0,5)) {
-      await deliveryApi('telegram-complete',job,AbortSignal.timeout(8000));
+      if (!workspace.custom[job.incident]?.localOnly) {
+        await deliveryApi('telegram-complete',job,AbortSignal.timeout(8000));
+      }
       sent.push(key);
     }
     const result=await deliveryApi('telegram-report-events',undefined,AbortSignal.timeout(6000));
@@ -1064,8 +1098,11 @@ function saveResolution(state,id,fields,who,now) {
     throw Error('Choose a runbook for this service.');
   }
   const custom = state.custom[id];
+  const active = state.active.includes(id);
+  if (active) startNextPreparedRun(incident,state,now);
   const timing = incidentWork(incident,state);
-  const previous = state.workHistory[timing.key];
+  const stored = state.workHistory[timing.key];
+  const previous = stored ?? (active ? undefined : reportRowFromResolution(incident,timing,state.resolutions[id]));
   const closedAt = previous?.closedAt || now;
   const closedBy = previous?.closedBy || who;
   const level = custom && Object.hasOwn(simulationSeverities,fields.level) ? fields.level : incidentPriority(incident,state);
@@ -1073,7 +1110,9 @@ function saveResolution(state,id,fields,who,now) {
   state.resolutions[id] = {...reviewed,id,title:incident.title,service:incident.service,company:incident.company,
     fingerprint:incident.fingerprint,priority:level,responder:closedBy,resolvedAt:closedAt,reviewedAt:now};
   state.workHistory[timing.key] = {...timing,...previous,level,closedAt,closedBy,via:previous?.via || 'website',verified:true,fix:reviewed.fix};
-  if (!previous && location.protocol.startsWith('http')) state.reportOutbox[timing.key] = {incident:id,openedAt:timing.openedAt,completedAt:closedAt,who};
+  if (!stored && !custom?.localOnly && location.protocol.startsWith('http')) {
+    state.reportOutbox[timing.key] = {incident:id,openedAt:timing.openedAt,completedAt:closedAt,who};
+  }
   for (const record of Object.values(state.custom).filter(item=>item.id===id || item.groupedUnder===id)) {
     updateSimulation(record,{status:'resolved',level:record.id===id ? level : record.level,
       note:record.id===id ? reviewed.fix : `Resolved with ${id}.`},closedBy,now);
@@ -1223,7 +1262,9 @@ function reportData() {
   if (includeSampleReports) entries.push(...demoReportEvents);
   const companyOptions=[...new Map(entries.map(row=>[companyKey(row.company),companyLabel(row.company)||'Unassigned'])).entries()]
     .sort((a,b)=>a[1].localeCompare(b[1]));
-  const selectedCompany=reportCompany===null ? 'All companies' : companyOptions.find(([key])=>key===reportCompany)?.[1] || 'Unassigned';
+  const selection=companyOptions.find(([key])=>key===reportCompany);
+  if (!selection) reportCompany=null;
+  const selectedCompany=selection?.[1] || 'All companies';
   const summary=reportSummary(reportCompany===null ? entries : entries.filter(row=>companyKey(row.company)===reportCompany),period);
   const {opened,resolved,companies,repeated,buckets,mttr,timed}=summary;
   const sampleIncidents=new Set([...opened,...resolved].filter(row=>row.via==='sample').map(row=>row.key)).size;
@@ -1373,8 +1414,12 @@ function documentList() {
   `).join('') || '<li>No procedures match the filter.</li>';
 }
 function calendar() {
-  const recent = scenarios.flatMap(incident=>incident.events.filter(event=>['Change','Maintenance'].includes(event.kind)).map(event=>({...event,service:incident.service}))).sort((a,b)=>b.time.localeCompare(a.time));
   const monthCodes = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const [monitoringYear,monitoringMonth,monitoringDay] = sampleMonitoringDate.split('-').map(Number);
+  const recent = scenarios.flatMap(incident=>incident.events.filter(event=>['Change','Maintenance'].includes(event.kind)).map(event=>({
+    ...event,service:incident.service,date:`${monthCodes[monitoringMonth-1]} ${monitoringDay}`,
+    month:monitoringYear*12+monitoringMonth-1,day:monitoringDay,
+  })));
   const dayFormat = new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit'});
   const simulated = Object.values(workspace.custom).map(record=>{
     const timestamp = record.triggeredAt ?? record.scheduledAt;
@@ -1384,9 +1429,8 @@ function calendar() {
   });
   const records = [
     ...history.map(record=>({...record,kind:'Archived incident'})),
-    ...recent.map(record=>({...record,date:'Nov 21'})),
     ...upcoming,
-  ].map(record=>({...record,month:2026*12+monthCodes.indexOf(record.date.slice(0,3)),day:Number(record.date.slice(4))}));
+  ].map(record=>({...record,month:2026*12+monthCodes.indexOf(record.date.slice(0,3)),day:Number(record.date.slice(4))})).concat(recent);
   const year = Math.floor(calendarMonth/12);
   const month = calendarMonth%12;
   const monthTitle = value=>new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',month:'long',year:'numeric'}).format(new Date(Date.UTC(Math.floor(value/12),value%12,1)));
@@ -1439,7 +1483,7 @@ function alertCards(incidents = openIncidents()) {
       <h2>${html(incident.title)}</h2><p>${html(incident.service)} · ${custom ? html(incident.type) : incident.affectedPct+'% affected in sample'}</p>
       <div class="references alert-sources" aria-label="Source alerts">${alerts.map(event=>ref(event.id)).join('')}</div>
       <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button>
-      <button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button>
+      ${custom?.localOnly ? '' : `<button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button>`}
       ${custom ? '' : `<button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button>`}</div></div></li>`;
   }).join('') || '<li>No alerts match these filters.</li>';
 }
@@ -1475,7 +1519,11 @@ function render() {
     history:()=>layout('Incident archive.','Compare previous causes, owners, priorities and documented fixes.',`<ul class="archive" id="list">${historyList()}</ul>`,true),
     runbooks:()=>layout('Runbook library.','Search the sample database for service procedures, recovery checks, and investigation guides.',`<ul class="archive" id="list">${documentList()}</ul>`,true)
   };
-  main.innerHTML = content[page]();
+  if (page === 'impact') {
+    if (pageChanged) main.replaceChildren(impactView.root);
+  } else {
+    main.innerHTML = content[page]();
+  }
   scheduleReportInsight();
   if (pageChanged) {
     const initial = renderedPage===undefined;
@@ -1604,19 +1652,25 @@ function openDialog(kicker,title,content) {
   else dialog.querySelector('[data-close]').focus({preventScroll:true});
 }
 function source(id) {
+  const incident = view()==='desk' ? byId(selected) : undefined;
+  const result = incident ? investigateCase(incident) : undefined;
   const document = documents.find(item=>item.id===id);
   if (document) {
+    const linked = document.incident && (!result || result.comparisons.some(({record})=>record.id===document.incident));
     openDialog(document.kind + ' / ' + id,document.title,`
       <p><small>${html(document.service)} · Owner: ${html(document.owner)} · Updated ${html(document.updated)} · Sample database</small></p>
       <p><strong>When to use it</strong><br>${html(document.useWhen)}</p>
       <ol class="archive">${document.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
       <p><strong>When to pause</strong><br>${html(document.stopWhen)}</p>
       <p><strong>How to verify recovery</strong><br>${html(document.verify)}</p>
-      ${document.incident ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}
-      ${freshnessPanel(document,byId(selected)?.service===document.service ? byId(selected).serviceVersion : undefined)}`);
+      ${linked ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}
+      ${freshnessPanel(document,incident,result)}`);
     return;
   }
-  const record = reviewedArchive().find(item=>item.id===id) || history.find(item=>item.id===id);
+  const archivedCase = incident?.id===id && cutoff==='23:59' && !workspace.active.includes(id)
+    ? workspace.resolutions[id] : undefined;
+  const record = result ? result.comparisons.find(({record})=>record.id===id)?.record || archivedCase
+    : reviewedArchive().find(item=>item.id===id) || history.find(item=>item.id===id);
   if (record) {
     const procedure = documents.find(item=>item.incident===record.id || item.id===record.runbook);
     openDialog('Incident archive / ' + id,record.title,`<p>${html(record.service)} · ${html(record.resolvedAt ? formatIncidentTime(record.resolvedAt) : record.date)} · ${record.priority} · ${html(record.responder)}</p>
@@ -1627,8 +1681,9 @@ function source(id) {
       ${procedure ? `<div class="block">${documentLink(procedure)}</div>` : '<p class="quiet">No runbook is linked to this archive record.</p>'}`);
     return;
   }
-  const event = byId(selected)?.events.find(item=>item.id===id) ||
-    [...scenarios,...Object.values(workspace.custom).map(asInvestigation)].flatMap(item=>item.events).find(item=>item.id===id);
+  const event = result ? result.evidence.find(item=>item.id===id)
+    : scenarios.flatMap(item=>item.events).find(item=>item.id===id) ||
+      Object.values(workspace.custom).flatMap(item=>asInvestigation(item).events).find(item=>item.id===id);
   if (event) openDialog(event.kind + ' / ' + id,event.title,`<p>${html(event.detail)}</p>
     <p class="mono">Occurred ${snapshotLabel(event.timeAt ?? event.time)} · Available ${snapshotLabel(event.seenAt ?? event.seen)}</p>`);
 }
@@ -2173,6 +2228,10 @@ async function reviewTelegramRoute(id) {
 }
 
 async function openTelegramNotice(incidentId='',recipient='') {
+  if (workspace.custom[incidentId]?.localOnly) {
+    notice('Challenge feed alerts stay in the workspace.','error');
+    return;
+  }
   openDialog('Telegram delivery','Send Telegram notification','<p data-delivery-status role="status">Loading paired recipients…</p>');
   const target=dialog.querySelector('[data-delivery-status]');
   try {
@@ -2181,7 +2240,7 @@ async function openTelegramNotice(incidentId='',recipient='') {
     const recipients=info.team||info.people.length;
     const incidentOptions = items=>items.map(incident=>`<option value="${incident.id}" ${incident.id===incidentId?'selected':''}>
       ${incidentPriority(incident)} · ${html(incident.title)}</option>`).join('');
-    const tests = Object.values(workspace.custom).filter(incident=>incident.triggeredAt!==null);
+    const tests = Object.values(workspace.custom).filter(incident=>incident.triggeredAt!==null && !incident.localOnly);
     openDialog('Telegram delivery','Send Telegram notification',`
       <p>Choose the team group for one post, or choose a private responder to request acknowledgement with a deadline. Custom incidents are labeled as test events.</p>
       <form class="delivery-form" data-telegram-notice-form>
@@ -2457,7 +2516,7 @@ function fallback(incident,result,question) {
     return [intro,`[${guide.id}] ${guide.title}`,...guide.steps.map(([name,step],index)=>`${index+1}. ${name}: ${step}`),`Pause if: ${guide.stopWhen}`,`Verify: ${guide.verify}`].join('\n\n');
   }
   if (/priorit|urgent|first|impact|cost|money/.test(q)) {
-    return `${incident.title} is ${priority(incident)}. The monitor shows ${incident.affectedPct}% of operations affected. Confirmed: ${incident.confirmed.join(', ')}. Check first: ${incident.next}`;
+    return `${incident.title} is ${incidentPriority(incident)}. The monitor shows ${incident.affectedPct}% of operations affected. Confirmed: ${incident.confirmed.join(', ')}. Check first: ${incident.next}`;
   }
   if (/before|past|similar|fix|compar/.test(q)) {
     const record = result.exact[0] || result.nearby[0];
@@ -2527,7 +2586,7 @@ async function ask(question, speak = false) {
     try {
       const earlierQuestions = conversation.map(turn=>turn.question);
       const response = await fetch('/api/ask', {method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({...aiIncidentPayload(incident),cutoff:snapshot,question,earlierQuestions})});
+        body:JSON.stringify({...aiIncidentPayload(incident,workspace,snapshot),cutoff:snapshot,question,earlierQuestions})});
       if (!response.ok) throw Error();
       const data = await response.json();
       reply = data.answer;
@@ -2623,11 +2682,13 @@ document.addEventListener('click',event=>{
     const incident = byId(data.trigger);
     choose(incident.id);
     void update(state=>{
+      const now=Date.now();
+      startNextPreparedRun(incident,state,now);
       if (!state.active.includes(incident.id)) {
         state.active.push(incident.id);
-        state.arrivals[incident.id]=Date.now();
+        state.arrivals[incident.id]=now;
         delete state.tasks[incident.id];
-      } else if (!state.tasks[incident.id]?.acceptedAt) state.arrivals[incident.id] ??= Date.now();
+      } else if (!state.tasks[incident.id]?.acceptedAt) state.arrivals[incident.id] ??= now;
       state.analyses[incident.id] ??= {status:'queued'};
       notification(state,incident.id,'Sample alert received',incident.title);
       if (incidentPriority(incident,state)==='P1' && !state.tasks[incident.id]) pageOnCall(state,incident);
@@ -2913,12 +2974,17 @@ document.addEventListener('submit',event=>{
     const id=form.elements.incident.value;
     const recipient=form.elements.recipient.value;
     const record=workspace.custom[id];
+    const incident=byId(id);
+    const target=form.querySelector('[data-delivery-status]');
+    if (!incident || record?.localOnly || record?.triggeredAt===null) {
+      target.textContent='Choose an incident available for Telegram delivery.';
+      return;
+    }
     const simulation=record ? simulationPayload(record) : undefined;
     const button=form.querySelector('[type=submit]');
-    const target=form.querySelector('[data-delivery-status]');
     button.disabled=true;
     target.textContent='Preparing the Telegram notification…';
-    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(byId(id)),recipient,simulation}).then(result=>{
+    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(incident),recipient,simulation}).then(result=>{
       if(target.isConnected&&dialog.open)showTelegramNotice(result,recipient);
     },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
     return;
@@ -3027,7 +3093,7 @@ document.addEventListener('change',event=>{
   if (event.target.matches('[data-resolution-template]')) {
     const form = event.target.form;
     const incident = byId(form.dataset.resolutionForm);
-    const previous = investigateCase(incident,'23:59').exact.find(record=>record.id===event.target.value);
+    const previous = investigateCase(incident,'23:59').reusableFixes.find(record=>record.id===event.target.value);
     if (previous) {
       form.elements.cause.value = previous.cause || '';
       form.elements.fix.value = previous.fix || '';
@@ -3143,22 +3209,9 @@ window.addEventListener('storage',event=>{
   discardRemovedToasts();
   queueToasts(workspace.notifications.filter(entry=>!before.has(entry.key)).reverse());
 });
-window.addEventListener('hashchange',()=>{
-  if (location.hash==='#main') return;
-  document.querySelector('#nav-toggle').setAttribute('aria-expanded','false');
-  if (view()!==renderedPage) window.scrollTo({top:0,behavior:'instant'});
-  query=''; render(); main.focus({preventScroll:true});
-});
-document.querySelector('#nav-toggle').addEventListener('click',event=>{
-  const control = event.currentTarget;
-  control.setAttribute('aria-expanded',String(control.getAttribute('aria-expanded')!=='true'));
-});
-document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault(); main.focus();});
-window.addEventListener('focus',refreshAutomaticIndicator);
-refreshAutomaticIndicator();
-tick();
-setInterval(tick,500);
-if (checkingGemini) {
+function checkGeminiStatus() {
+  if (!checkingGemini || geminiStatusRequested || view()==='impact') return;
+  geminiStatusRequested = true;
   fetch('/api/status',{signal:AbortSignal.timeout(5000)})
     .then(response=>response.json())
     .then(status=>{connected = status.gemini===true;})
@@ -3169,4 +3222,37 @@ if (checkingGemini) {
       void runNextAnalysis();
     });
 }
+
+function closeWorkspaceMenu(returnFocus = false) {
+  if (navToggle.getAttribute('aria-expanded')!=='true') return;
+  navToggle.setAttribute('aria-expanded','false');
+  if (returnFocus && navToggle.getClientRects().length) navToggle.focus();
+}
+
+window.addEventListener('hashchange',()=>{
+  if (location.hash==='#main') return;
+  closeWorkspaceMenu();
+  if (view()!==renderedPage) window.scrollTo({top:0,behavior:'instant'});
+  query=''; render(); main.focus({preventScroll:true});
+  checkGeminiStatus();
+});
+navToggle.addEventListener('click',()=>{
+  navToggle.setAttribute('aria-expanded',String(navToggle.getAttribute('aria-expanded')!=='true'));
+});
+workspaceNav.addEventListener('click',event=>{
+  const link = event.target.closest('a[data-view]');
+  if (link) closeWorkspaceMenu(link.hash===location.hash);
+});
+document.addEventListener('keydown',event=>{
+  if (event.key!=='Escape' || event.defaultPrevented || navToggle.getAttribute('aria-expanded')!=='true' ||
+      !navToggle.getClientRects().length || dialog.open || assistantWindow.open || personaMenu.matches(':popover-open')) return;
+  event.preventDefault();
+  closeWorkspaceMenu(true);
+});
+document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault(); main.focus();});
+window.addEventListener('focus',refreshAutomaticIndicator);
+refreshAutomaticIndicator();
+tick();
+setInterval(tick,500);
+checkGeminiStatus();
 render();
