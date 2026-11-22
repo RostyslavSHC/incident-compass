@@ -430,6 +430,7 @@ function actionOnTask(action, id) {
     if (!state.active.includes(id)) return;
     const task = state.tasks[id];
     if (action === 'page' && !task && incidentPriority(incident,state) === 'P1') {
+      startNextPreparedRun(incident,state,Date.now());
       pageOnCall(state,incident);
       return `Urgent page sent to ${incident.owner} in this demo.`;
     }
@@ -445,7 +446,9 @@ function actionOnTask(action, id) {
     const canClaim = action === 'claim' && task?.status === 'open';
     const canPickUp = action==='accept' && !task && incidentPriority(incident,state)!=='P1';
     if (canAccept || canClaim || canPickUp) {
-      state.tasks[id] = {status:'claimed',by:performer,acceptedAt:Date.now()};
+      const acceptedAt = Date.now();
+      startNextPreparedRun(incident,state,acceptedAt);
+      state.tasks[id] = {status:'claimed',by:performer,acceptedAt};
       notification(state,id,'Ownership confirmed',`${performer} accepted the task.`);
       if (canClaim) state.messages.push({id, type:'claim', by:performer, time:Date.now()});
       return `${performer} accepted ownership of ${id}.`;
@@ -976,6 +979,26 @@ function incidentWork(incident,state) {
     level:incidentPriority(incident,state),...localAcceptance};
 }
 
+function reportRowFromResolution(incident,row,saved) {
+  if (Number.isFinite(saved?.resolvedAt) && saved.resolvedAt>=row.openedAt) {
+    return {...row,closedAt:saved.resolvedAt,closedBy:saved.responder,via:'website',verified:true,fix:saved.fix};
+  }
+  if (incident.status!=='resolved') return undefined;
+  const event=incident.activity.findLast(item=>item.status==='Resolved' && item.time>=row.openedAt);
+  if (event) return {...row,closedAt:event.time,closedBy:event.who,via:'website'};
+}
+
+function startNextPreparedRun(incident,state,now) {
+  const {id} = incident;
+  if (state.custom[id]) return;
+  const timing = incidentWork(incident,state);
+  const previous = state.workHistory[timing.key] ?? reportRowFromResolution(incident,timing,state.resolutions[id]);
+  if (!Number.isFinite(previous?.closedAt)) return;
+  state.workHistory[timing.key] ??= previous;
+  state.arrivals[id] = now;
+  delete state.tasks[id];
+}
+
 function localReportEvents(state = workspace) {
   const rows = new Map(Object.entries(state.workHistory));
   for (const id of [...new Set([...state.active,...Object.keys(state.resolutions),...Object.keys(state.custom)])]) {
@@ -983,14 +1006,7 @@ function localReportEvents(state = workspace) {
     if (!incident || incident.triggeredAt===null || incident.groupedUnder) continue;
     const row=incidentWork(incident,state);
     if (rows.has(row.key)) continue;
-    const saved=!state.active.includes(id) && state.resolutions[id];
-    if (saved?.resolvedAt>=row.openedAt) {
-      Object.assign(row,{closedAt:saved.resolvedAt,closedBy:saved.responder,via:'website',verified:true,fix:saved.fix});
-    } else if (incident.status==='resolved') {
-      const event=incident.activity.findLast(item=>item.status==='Resolved' && item.time>row.openedAt);
-      if (event) Object.assign(row,{closedAt:event.time,closedBy:event.who,via:'website'});
-    }
-    rows.set(row.key,row);
+    rows.set(row.key,reportRowFromResolution(incident,row,state.resolutions[id]) ?? row);
   }
   return [...rows.values()];
 }
@@ -1048,8 +1064,11 @@ function saveResolution(state,id,fields,who,now) {
     throw Error('Choose a runbook for this service.');
   }
   const custom = state.custom[id];
+  const active = state.active.includes(id);
+  if (active) startNextPreparedRun(incident,state,now);
   const timing = incidentWork(incident,state);
-  const previous = state.workHistory[timing.key];
+  const stored = state.workHistory[timing.key];
+  const previous = stored ?? (active ? undefined : reportRowFromResolution(incident,timing,state.resolutions[id]));
   const closedAt = previous?.closedAt || now;
   const closedBy = previous?.closedBy || who;
   const level = custom && Object.hasOwn(simulationSeverities,fields.level) ? fields.level : incidentPriority(incident,state);
@@ -1057,7 +1076,7 @@ function saveResolution(state,id,fields,who,now) {
   state.resolutions[id] = {...reviewed,id,title:incident.title,service:incident.service,company:incident.company,
     fingerprint:incident.fingerprint,priority:level,responder:closedBy,resolvedAt:closedAt,reviewedAt:now};
   state.workHistory[timing.key] = {...timing,...previous,level,closedAt,closedBy,via:previous?.via || 'website',verified:true,fix:reviewed.fix};
-  if (!previous && !custom?.localOnly && location.protocol.startsWith('http')) {
+  if (!stored && !custom?.localOnly && location.protocol.startsWith('http')) {
     state.reportOutbox[timing.key] = {incident:id,openedAt:timing.openedAt,completedAt:closedAt,who};
   }
   for (const record of Object.values(state.custom).filter(item=>item.id===id || item.groupedUnder===id)) {
@@ -1209,7 +1228,9 @@ function reportData() {
   if (includeSampleReports) entries.push(...demoReportEvents);
   const companyOptions=[...new Map(entries.map(row=>[companyKey(row.company),companyLabel(row.company)||'Unassigned'])).entries()]
     .sort((a,b)=>a[1].localeCompare(b[1]));
-  const selectedCompany=reportCompany===null ? 'All companies' : companyOptions.find(([key])=>key===reportCompany)?.[1] || 'Unassigned';
+  const selection=companyOptions.find(([key])=>key===reportCompany);
+  if (!selection) reportCompany=null;
+  const selectedCompany=selection?.[1] || 'All companies';
   const summary=reportSummary(reportCompany===null ? entries : entries.filter(row=>companyKey(row.company)===reportCompany),period);
   const {opened,resolved,companies,repeated,buckets,mttr,timed}=summary;
   const sampleIncidents=new Set([...opened,...resolved].filter(row=>row.via==='sample').map(row=>row.key)).size;
@@ -1359,8 +1380,12 @@ function documentList() {
   `).join('') || '<li>No procedures match the filter.</li>';
 }
 function calendar() {
-  const recent = scenarios.flatMap(incident=>incident.events.filter(event=>['Change','Maintenance'].includes(event.kind)).map(event=>({...event,service:incident.service}))).sort((a,b)=>b.time.localeCompare(a.time));
   const monthCodes = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const [monitoringYear,monitoringMonth,monitoringDay] = sampleMonitoringDate.split('-').map(Number);
+  const recent = scenarios.flatMap(incident=>incident.events.filter(event=>['Change','Maintenance'].includes(event.kind)).map(event=>({
+    ...event,service:incident.service,date:`${monthCodes[monitoringMonth-1]} ${monitoringDay}`,
+    month:monitoringYear*12+monitoringMonth-1,day:monitoringDay,
+  })));
   const dayFormat = new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit'});
   const simulated = Object.values(workspace.custom).map(record=>{
     const timestamp = record.triggeredAt ?? record.scheduledAt;
@@ -1370,9 +1395,8 @@ function calendar() {
   });
   const records = [
     ...history.map(record=>({...record,kind:'Archived incident'})),
-    ...recent.map(record=>({...record,date:'Nov 21'})),
     ...upcoming,
-  ].map(record=>({...record,month:2026*12+monthCodes.indexOf(record.date.slice(0,3)),day:Number(record.date.slice(4))}));
+  ].map(record=>({...record,month:2026*12+monthCodes.indexOf(record.date.slice(0,3)),day:Number(record.date.slice(4))})).concat(recent);
   const year = Math.floor(calendarMonth/12);
   const month = calendarMonth%12;
   const monthTitle = value=>new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',month:'long',year:'numeric'}).format(new Date(Date.UTC(Math.floor(value/12),value%12,1)));
@@ -2377,11 +2401,13 @@ document.addEventListener('click',event=>{
     const incident = byId(data.trigger);
     choose(incident.id);
     void update(state=>{
+      const now=Date.now();
+      startNextPreparedRun(incident,state,now);
       if (!state.active.includes(incident.id)) {
         state.active.push(incident.id);
-        state.arrivals[incident.id]=Date.now();
+        state.arrivals[incident.id]=now;
         delete state.tasks[incident.id];
-      } else if (!state.tasks[incident.id]?.acceptedAt) state.arrivals[incident.id] ??= Date.now();
+      } else if (!state.tasks[incident.id]?.acceptedAt) state.arrivals[incident.id] ??= now;
       state.analyses[incident.id] ??= {status:'queued'};
       notification(state,incident.id,'Sample alert received',incident.title);
       if (incidentPriority(incident,state)==='P1' && !state.tasks[incident.id]) pageOnCall(state,incident);
