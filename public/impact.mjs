@@ -100,7 +100,7 @@ export function createImpactView(escape) {
         <h2 id="impact-stage" tabindex="-1">${escape(incident.title)}</h2>
         <p>${escape(incident.description)}</p>
       </div>
-      <div class="impact-clock"><small>Elapsed</small><strong role="timer" data-impact-clock>${time(performance.now()-run.startedAt)}</strong></div>
+      <div class="impact-clock"><small>Elapsed</small><strong role="timer" aria-label="Elapsed investigation time" data-impact-clock>${time(performance.now()-run.startedAt)}</strong></div>
     </section>
     <div class="impact-columns">
       ${sourcePanel(run)}
@@ -184,7 +184,15 @@ export function createImpactView(escape) {
   }
 
   function focusStage() {
-    root.querySelector('#impact-stage').focus();
+    const heading = root.querySelector('#impact-stage');
+    heading.focus({preventScroll:true});
+    const header = root.closest('.frame')?.querySelector('.top');
+    const headerBottom = header && getComputedStyle(header).position==='sticky'
+      ? Math.max(0, header.getBoundingClientRect().bottom) : 0;
+    const {top,bottom} = heading.getBoundingClientRect();
+    if (top<headerBottom+8 || bottom>window.innerHeight) {
+      window.scrollBy({top:top-headerBottom-8,behavior:'instant'});
+    }
   }
 
   root.addEventListener('change',event=>{

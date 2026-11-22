@@ -13,6 +13,8 @@ const persona = document.querySelector('#persona');
 const personaMenu = document.querySelector('#persona-menu');
 const personaName = document.querySelector('#persona-name');
 const night = document.querySelector('#night');
+const navToggle = document.querySelector('#nav-toggle');
+const workspaceNav = document.querySelector('#workspace-nav');
 const saveKey = 'incident-compass-workspace-v1';
 const windowMs = 30_000;
 const entranceTimings = {
@@ -93,6 +95,7 @@ let cutoff = '23:59';
 let query = '';
 let connected = false;
 let checkingGemini = location.protocol.startsWith('http');
+let geminiStatusRequested = false;
 let analysisBusy = false;
 let analysisCooldown = 0;
 const toastQueue = [];
@@ -377,7 +380,7 @@ function aiIncidentPayload(incident,state = workspace) {
 }
 
 async function runNextAnalysis() {
-  if (!connected || analysisBusy || Date.now()<analysisCooldown) return;
+  if (view()==='impact' || !connected || analysisBusy || Date.now()<analysisCooldown) return;
   const requested = byId(selected);
   const foreground = view()==='desk' && activeTab==='brief' && cutoff==='23:59' && requested && requested.triggeredAt!==null;
   const id = foreground && (!workspace.analyses[selected] || workspace.analyses[selected].status==='queued')
@@ -385,6 +388,7 @@ async function runNextAnalysis() {
   if (!id) return;
   analysisBusy = true;
   const analyze = async ()=>{
+    if (view()==='impact') return;
     const state = read();
     const incident = byId(id,state);
     const existing = state.analyses[id];
@@ -2839,22 +2843,9 @@ window.addEventListener('storage',event=>{
   discardRemovedToasts();
   queueToasts(workspace.notifications.filter(entry=>!before.has(entry.key)).reverse());
 });
-window.addEventListener('hashchange',()=>{
-  if (location.hash==='#main') return;
-  document.querySelector('#nav-toggle').setAttribute('aria-expanded','false');
-  if (view()!==renderedPage) window.scrollTo({top:0,behavior:'instant'});
-  query=''; render(); main.focus({preventScroll:true});
-});
-document.querySelector('#nav-toggle').addEventListener('click',event=>{
-  const control = event.currentTarget;
-  control.setAttribute('aria-expanded',String(control.getAttribute('aria-expanded')!=='true'));
-});
-document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault(); main.focus();});
-window.addEventListener('focus',refreshAutomaticIndicator);
-refreshAutomaticIndicator();
-tick();
-setInterval(tick,500);
-if (checkingGemini) {
+function checkGeminiStatus() {
+  if (!checkingGemini || geminiStatusRequested || view()==='impact') return;
+  geminiStatusRequested = true;
   fetch('/api/status',{signal:AbortSignal.timeout(5000)})
     .then(response=>response.json())
     .then(status=>{connected = status.gemini===true;})
@@ -2865,4 +2856,37 @@ if (checkingGemini) {
       void runNextAnalysis();
     });
 }
+
+function closeWorkspaceMenu(returnFocus = false) {
+  if (navToggle.getAttribute('aria-expanded')!=='true') return;
+  navToggle.setAttribute('aria-expanded','false');
+  if (returnFocus && navToggle.getClientRects().length) navToggle.focus();
+}
+
+window.addEventListener('hashchange',()=>{
+  if (location.hash==='#main') return;
+  closeWorkspaceMenu();
+  if (view()!==renderedPage) window.scrollTo({top:0,behavior:'instant'});
+  query=''; render(); main.focus({preventScroll:true});
+  checkGeminiStatus();
+});
+navToggle.addEventListener('click',()=>{
+  navToggle.setAttribute('aria-expanded',String(navToggle.getAttribute('aria-expanded')!=='true'));
+});
+workspaceNav.addEventListener('click',event=>{
+  const link = event.target.closest('a[data-view]');
+  if (link) closeWorkspaceMenu(link.hash===location.hash);
+});
+document.addEventListener('keydown',event=>{
+  if (event.key!=='Escape' || event.defaultPrevented || navToggle.getAttribute('aria-expanded')!=='true' ||
+      !navToggle.getClientRects().length || dialog.open || assistantWindow.open || personaMenu.matches(':popover-open')) return;
+  event.preventDefault();
+  closeWorkspaceMenu(true);
+});
+document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault(); main.focus();});
+window.addEventListener('focus',refreshAutomaticIndicator);
+refreshAutomaticIndicator();
+tick();
+setInterval(tick,500);
+checkGeminiStatus();
 render();
