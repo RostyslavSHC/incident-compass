@@ -33,6 +33,7 @@ function routingText(kind,wait,deadline) {
     decline:'\n\n👥 <b>Team escalation · Responder declined</b>\nTap Claim incident to take ownership.',
     timeout:'\n\n👥 <b>Team escalation · No response before the deadline</b>\nTap Claim incident to take ownership.',
     unavailable:'\n\n👥 <b>Team escalation · Private page could not be confirmed</b>\nTap Claim incident to take ownership.',
+    unassigned:'\n\n👥 <b>Team page · No private responder assigned</b>\nTap Claim incident to take ownership.',
   }[kind];
 }
 
@@ -100,7 +101,7 @@ function reportEvent(route) {
     company:route.company || (scenario ? sampleCompanyFor(scenario.service) : ''),fingerprint:route.fingerprint || scenario?.fingerprint};
 }
 
-export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=async()=>{},now=Date.now}) {
+export function createTelegramRouter({connect,call,onUpdates=()=>{},onPollError=()=>{},needsUpdates=()=>false,onEmail=async()=>{},now=Date.now}) {
   let queue=Promise.resolve();
   let running=false;
   const pending=new Map();
@@ -116,12 +117,14 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=asyn
     const people=known.people || [];
     const account = people.find(item=>item.chat===config.owner);
     const label = account?.label || (ownerProfile?.key===ownerProfileKey(config) ? ownerProfile.label : null);
-    const owner=privateId(config.owner) ? {id:'default',chat:config.owner,label:label||'Connected private chat'} : undefined;
+    const owner=privateId(config.owner) && known.removedOwner!==config.owner
+      ? {id:'default',chat:config.owner,label:label||'Connected private chat'} : undefined;
     return {team:known.team,people:[owner,...people.filter(item=>item.chat!==config.owner)].filter(Boolean),auto:known.auto||{},enrollment:known.enrollment};
   }
   async function resolveOwnerProfile(state,config) {
     const key = ownerProfileKey(config);
-    if (!key || state.connections[botId(config.token)]?.people?.some(person=>person.chat===config.owner&&person.label)) return;
+    const known=state.connections[botId(config.token)];
+    if (!key || known?.removedOwner===config.owner || known?.people?.some(person=>person.chat===config.owner&&person.label)) return;
     if (ownerProfile?.key===key) {
       if (ownerProfile.pending) return ownerProfile.pending;
       if (ownerProfile.expires>now()) return;
@@ -156,7 +159,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=asyn
       routes:state.routes.slice(0,20).map(summarize),
     };
   }
-  async function register(token,chat,label,mode) {
+  async function register(token,chat,label,mode,{keepLabel=false}={}) {
     return exclusive(async()=>{
       const config=await connect();
       if (token!==config.token || (mode==='team' ? !groupId(chat) : !privateId(chat))) return false;
@@ -171,13 +174,54 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=asyn
         known.team={chat,label};
       }
       else {
-        const existing=known.people.find(item=>item.chat===chat);
-        if (existing) existing.label=label;
-        else if (known.people.length<12) known.people.push({id:randomUUID(),chat,label});
-        else return false;
+        let person=known.people.find(item=>item.chat===chat);
+        if (person && !keepLabel) person.label=label;
+        if (!person) {
+          if (known.people.length>=12 && chat!==config.owner) return false;
+          person={id:randomUUID(),chat,label};
+          known.people.push(person);
+        }
+        if (chat===config.owner) delete known.removedOwner;
+        await save(state);
+        return {id:chat===config.owner?'default':person.id,label:person.label,destination:masked(chat)};
       }
       await save(state);
       return true;
+    });
+  }
+  async function defaultRecipientRemoved() {
+    const [state,config]=await Promise.all([load(),connect()]);
+    return Boolean(config.owner && state.connections[botId(config.token)]?.removedOwner===config.owner);
+  }
+  async function cachedBotUsername(token) {
+    const known=(await load()).connections[botId(token)];
+    return known?.username || /^https:\/\/t\.me\/([a-z0-9_]{5,64})\?start=/i.exec(known?.enrollment?.url || '')?.[1];
+  }
+  async function rememberBotUsername(token,username) {
+    return exclusive(async()=>{
+      const state=await load();
+      const known=state.connections[botId(token)] ||= {people:[]};
+      if (known.username===username) return;
+      known.username=username;
+      await save(state);
+    });
+  }
+  async function removeResponder(identity) {
+    return exclusive(async()=>{
+      const [state,config]=await Promise.all([load(),connect()]);
+      const bot=botId(config.token);
+      const person=targets(state,config).people.find(item=>item.id===identity.id && masked(item.chat)===identity.destination);
+      if (!person) return;
+      const known=state.connections[bot] ||= {people:[]};
+      known.people=(known.people || []).filter(item=>item.chat!==person.chat);
+      if (person.id==='default') known.removedOwner=person.chat;
+      if (known.auto?.owner===person.id) known.auto.owner='';
+      for (const route of state.routes) {
+        if (route.bot===bot && route.owner?.chat===person.chat && ['queued-private','sending-private','waiting'].includes(route.stage)) {
+          Object.assign(route,{stage:'queued-team',reason:'unassigned'});
+        }
+      }
+      await save(state);
     });
   }
   async function preview(input) {
@@ -296,7 +340,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=asyn
     const route={id:randomUUID(),bot:entry.bot,incident:entry.incident,level:entry.level,wait:entry.wait,
       testMarkup:entry.testMarkup,title:entry.title,service:entry.service,company:entry.company,fingerprint:entry.fingerprint,next:entry.next,
       owner:entry.owner,team:entry.team,created:now(),event:entry.event,
-      stage:direct?'queued-team':'queued-private',reason:direct?'critical':null};
+      stage:direct?'queued-team':'queued-private',reason:entry.reason || (direct?'critical':null)};
     state.routes.unshift(route);
     const finished=state.routes.filter(item=>!openRoute(item) && !item.completionEditAt);
     if(finished.length>45) {
@@ -323,7 +367,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=asyn
       }
       const wait=Number(input.wait);
       const {team,people}=targets(state,config);
-      if(!team||!people.some(person=>person.id===input.owner)||!secondsAllowed.has(wait))return {error:'Choose a paired team group, a private responder, and a response window.'};
+      if(!team||(input.owner!==''&&!people.some(person=>person.id===input.owner))||!secondsAllowed.has(wait))return {error:'Choose a paired group, a valid responder or team-only routing, and a response window.'};
       const hook=await call(config.token,'getWebhookInfo');
       if(!hook.ok||hook.result?.url)return {error:'Use an accessible Telegram bot without a webhook for automatic delivery.'};
       known.auto={enabled:true,owner:input.owner,wait};
@@ -352,8 +396,9 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=asyn
       if(!auto.enabled)return {status:'disabled'};
       if(auto.owner==='default') await resolveOwnerProfile(state,config);
       const owner=(auto.owner==='default'?targets(state,config).people:people).find(person=>person.id===auto.owner);
-      if(!config.token||!team||(level!=='P1'&&!owner))return {error:'Automatic Telegram delivery needs its group and responder configured.'};
+      if(!config.token||!team)return {error:'Automatic Telegram delivery needs its team group configured.'};
       const route=await queueRoute(state,{...alert,bot:id,wait:auto.wait,owner,team,event:input.event,testMarkup:test?.markup,
+        direct:level==='P1'||!owner,reason:level!=='P1'&&!owner?'unassigned':null,
         company:test ? companyLabel(input.simulation.company) : undefined,
         fingerprint:test ? extractErrorSignature(input.simulation.title,input.simulation.description) : undefined});
       return {status:'queued',route:summarize(route)};
@@ -395,6 +440,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=asyn
     }
     if(joined)joined.label=responderName(user);
     else known.people.push({id:randomUUID(),chat:userId,label:responderName(user),group:known.team.chat});
+    if (known.removedOwner===userId) delete known.removedOwner;
     await save(state);
     await call(token,'sendMessage',{chat_id:userId,text:'✅ Private Aurelis alerts are enabled for this chat. The on-call coordinator can now select you as a responder.'});
   }
@@ -545,8 +591,9 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=asyn
       const outstanding=state.routes.filter(route=>route.bot===id&&openRoute(route));
       const cardUpdate=state.routes.find(route=>route.bot===id && route.completionEditAt<=now());
       const enrolling=Boolean(state.connections[id]?.enrollment);
-      if(!outstanding.length&&!cardUpdate&&!enrolling)return;
-      if(enrolling||cardUpdate||outstanding.some(route=>['waiting','open-team','accepted'].includes(route.stage))){
+      const pendingPairing=needsUpdates(config.token);
+      if(!outstanding.length&&!cardUpdate&&!enrolling&&!pendingPairing)return;
+      if(enrolling||pendingPairing||cardUpdate||outstanding.some(route=>['waiting','open-team','accepted'].includes(route.stage))){
         const data=await call(config.token,'getUpdates',{offset:state.offsets[id] || 0,timeout:0,limit:50,allowed_updates:['message','callback_query']});
         if(data.ok&&Array.isArray(data.result)){
           onUpdates(config.token,data.result);
@@ -556,7 +603,7 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=asyn
             if(Number.isInteger(update.update_id))state.offsets[id]=update.update_id+1;
           }
           if(data.result.length)await save(state);
-        }
+        } else onPollError(config.token,data.http);
       }
       for(const route of outstanding){
         if(route.stage==='sending-team'){route.stage='failed';route.notice='Server restarted during the group post. Check Telegram before retrying.';await save(state);}
@@ -574,5 +621,5 @@ export function createTelegramRouter({connect,call,onUpdates=()=>{},onEmail=asyn
       if(completedCard)await showCompleted(state,completedCard,config.token);
     });}finally {running=false;}
   }
-  return {list,register,preview,start,previewNotice,sendNotice,configureAuto,recordAlert,enableEnrollment,reportEvents,completeFromWeb,step};
+  return {list,register,removeResponder,defaultRecipientRemoved,cachedBotUsername,rememberBotUsername,preview,start,previewNotice,sendNotice,configureAuto,recordAlert,enableEnrollment,reportEvents,completeFromWeb,step};
 }

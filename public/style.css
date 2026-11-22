@@ -90,6 +90,8 @@ small {font-size:.84rem}
 .persona-option[aria-checked="true"] {background:var(--acid);color:#191a14;border-color:#191a14}
 .persona-option:hover,.persona-option:focus-visible {background:var(--pale-blue);color:var(--ink);border-color:var(--blue)}
 .persona-option:focus-visible {outline-offset:-2px}
+.persona-add {margin-bottom:5px;border-color:var(--rule)}
+.persona-channels {display:block;font-weight:400;color:inherit;font-size:.69rem}
 .persona-avatar {display:grid;place-items:center;width:25px;height:25px;border:1px solid currentColor;font:700 .62rem var(--mono)}
 .telegram-avatar {background:var(--pale-blue);color:var(--blue)}
 .persona-check {visibility:hidden}

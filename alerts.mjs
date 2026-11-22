@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {readFile,writeFile,rename,rm} from 'node:fs/promises';
 import {priority,scenarios} from './public/data.mjs';
 import {createTelegramRouter,renderTelegram} from './telegram-routing.mjs';
@@ -45,6 +45,14 @@ async function saveLocal(path,settings) {
 const saveProviders=settings=>saveLocal(providerPath,settings);
 const providerFor=settings=>Object.hasOwn(emailProviders,settings.EMAIL_PROVIDER) ? settings.EMAIL_PROVIDER
   : settings.RESEND_API_KEY && settings.ALERT_EMAIL_FROM ? 'resend' : 'gmail';
+const maxEmailRecipients=8;
+const emailRecipients=contacts=>[...new Set((Array.isArray(contacts.email) ? contacts.email : [])
+  .filter(value=>typeof value==='string' && validValues.ALERT_EMAIL_FROM.test(value)).map(value=>value.toLowerCase()))];
+const teamMembers=contacts=>Array.isArray(contacts.members) ? contacts.members : [];
+const telegramIdentity=({id,destination})=>({id,destination});
+const sameTelegram=(first,second)=>Boolean(first && second && first.id===second.id && first.destination===second.destination);
+const emailContactId=address=>'email:'+createHash('sha256').update(address).digest('hex').slice(0,24);
+const telegramContactId=person=>`telegram:${person.id}:${person.destination}`;
 
 async function loadConfig() {
   const [contacts,saved] = await Promise.all([readObject(contactPath),readObject(providerPath)]);
@@ -52,10 +60,10 @@ async function loadConfig() {
   settings.GMAIL_APP_PASSWORD=settings.GMAIL_APP_PASSWORD.replace(/\s/g,'');
   const targets = {
     sms:(Array.isArray(contacts.sms) ? contacts.sms : []).filter(value=>typeof value==='string' && validValues.TWILIO_FROM.test(value)).slice(0,8),
-    email:[...new Set((Array.isArray(contacts.email) ? contacts.email : []).filter(value=>typeof value==='string' && validValues.ALERT_EMAIL_FROM.test(value)).map(value=>value.toLowerCase()))].slice(0,8),
+    email:emailRecipients(contacts).slice(0,maxEmailRecipients),
     telegram:validValues.TELEGRAM_CHAT_ID.test(settings.TELEGRAM_CHAT_ID) ? [settings.TELEGRAM_CHAT_ID] : [],
   };
-  return {settings,targets};
+  return {settings,targets,contacts};
 }
 
 function mask(channel,recipient) {
@@ -197,6 +205,20 @@ export function createAlertApi({port,json,request = fetch}) {
     } catch { return []; }
   }
   const discoveries = new Map();
+  function restoreMemberInvites(token,contacts) {
+    const time=Date.now();
+    for (const [id,entry] of discoveries) if (entry.expires<=time) discoveries.delete(id);
+    for (const member of teamMembers(contacts)) {
+      const invite=member.invite;
+      if (invite && invite.bot===token.split(':')[0] && invite.expires>time && !discoveries.has(invite.id)) {
+        discoveries.set(invite.id,{...invite,token,member:member.id,routeMode:'responder'});
+      }
+    }
+  }
+  function memberStatus(member,people,recipients) {
+    return {id:member.id,name:member.name,email:recipients.includes(member.email) ? mask('email',member.email) : null,
+      telegram:people.find(person=>sameTelegram(person,member.telegram)) || null};
+  }
   function findPairing(entry,updates) {
     const match=Array.isArray(updates)&&updates.find(({message})=>
       (!(entry.personal||entry.routeMode==='responder') || message?.chat?.type==='private') &&
@@ -211,11 +233,26 @@ export function createAlertApi({port,json,request = fetch}) {
   };
   const telegram=createTelegramRouter({
     connect:async()=>{
-      const {settings}=await loadConfig();
+      const {settings,contacts}=await loadConfig();
+      restoreMemberInvites(settings.TELEGRAM_BOT_TOKEN,contacts);
       return {token:settings.TELEGRAM_BOT_TOKEN,owner:settings.TELEGRAM_CHAT_ID};
     },call,
+    needsUpdates:token=>[...discoveries.values()].some(entry=>entry.token===token && entry.expires>Date.now() &&
+      (!entry.chatId || entry.member && !entry.result)),
     onUpdates:(token,updates)=>{
-      for(const entry of discoveries.values()) if(entry.token===token&&entry.expires>Date.now()&&!entry.chatId)findPairing(entry,updates);
+      for (const entry of discoveries.values()) {
+        if (entry.token!==token || entry.expires<=Date.now()) continue;
+        delete entry.pollError;
+        if (!entry.chatId) findPairing(entry,updates);
+        if (entry.member && entry.chatId && !entry.result) void completeMemberPairing(entry).catch(()=>{});
+      }
+    },
+    onPollError:(token,http)=>{
+      for (const entry of discoveries.values()) {
+        if (entry.token===token && !entry.chatId) entry.pollError=http===409
+          ? 'Telegram polling is busy. Keep one Aurelis server connected to this bot.'
+          : 'Aurelis is retrying the connection to Telegram.';
+      }
     },
     onEmail:async alert=>{
       try { await email.enqueue(alert); }
@@ -228,22 +265,188 @@ export function createAlertApi({port,json,request = fetch}) {
   setInterval(()=>void telegram.step().catch(()=>{}),2500).unref();
   setInterval(()=>void email.step().catch(()=>{}),2500).unref();
   let saving = false;
+  const confirmingEmail=new Set();
+  async function confirmMemberEmail(address) {
+    const {settings,targets}=await loadConfig();
+    if (!targets.email.includes(address)) return {status:'rejected',detail:'This email address is no longer on the alert list.'};
+    if (!emailProviders[providerFor(settings)].keys.every(key=>validValues[key].test(settings[key]))) {
+      return {status:'rejected',detail:'Set up an email sender in Delivery setup, then resend the confirmation.'};
+    }
+    if (confirmingEmail.has(address)) return {status:'duplicate',detail:'A confirmation is already being sent.'};
+    confirmingEmail.add(address);
+    try {
+      if (await email.hasPendingConfirmation(address)) return {status:'queued',detail:'A confirmation is already queued for retry.'};
+      const message={subject:'Aurelis incident email notifications',
+        text:'This email address was added to Aurelis incident notifications. When automatic email is on, you will receive informational copies of new incident alerts. Use Telegram to respond to incidents.'};
+      const result=await deliverAlert('email',address,message,settings,randomUUID(),request);
+      if (result.status==='unavailable') {
+        const detail=`${result.detail} The confirmation is queued for retry.`;
+        await email.retryConfirmation(address,message,detail);
+        return {status:'queued',detail};
+      }
+      deliveries.unshift({...result,channel:'email',destination:mask('email',address),time:Date.now(),
+        detail:result.detail || (result.status==='accepted'?'Email setup confirmation accepted by the provider.':'The email provider did not confirm the setup message.')});
+      deliveries.length=Math.min(deliveries.length,50);
+      return {status:result.status,detail:deliveries[0].detail};
+    } finally { confirmingEmail.delete(address); }
+  }
+
+  async function updateTeamMembers(input) {
+    if (saving) return {error:'Another settings update is in progress. Try again.'};
+    saving=true;
+    try {
+      const [info,contacts]=await Promise.all([telegram.list(),readObject(contactPath)]);
+      const members=teamMembers(contacts);
+      const recipients=emailRecipients(contacts);
+      const prior=members.find(member=>member.id===input.id);
+      const otherAddress=recipients.find(address=>emailContactId(address)===input.id && !members.some(member=>member.email===address));
+      const otherTelegram=info.people.find(person=>telegramContactId(person)===input.id && !members.some(member=>sameTelegram(person,member.telegram)));
+      if (input.id && !prior && !otherAddress && !otherTelegram) return {error:'This member or recipient is no longer on the alert list.'};
+      if (input.action==='confirm-email') {
+        const address=prior?.email || otherAddress;
+        return recipients.includes(address) ? {confirmAddress:address} : {error:'Save an email address before sending a confirmation.'};
+      }
+      if (input.action==='remove') {
+        if (!input.id || input.confirm!==true) return {error:'Choose a member or recipient and confirm removal.'};
+        const identity=prior?.telegram || otherTelegram;
+        if (identity) await telegram.removeResponder(identity);
+        await saveLocal(contactPath,{...contacts,email:recipients.filter(address=>address!==(prior?.email || otherAddress)),
+          members:members.filter(member=>member!==prior)});
+        for (const [key,entry] of discoveries) if (prior && entry.member===prior.id) discoveries.delete(key);
+        return {removed:true};
+      }
+      const name=typeof input.name==='string' ? input.name.trim().replace(/\s+/g,' ') : '';
+      const address=typeof input.email==='string' ? input.email.trim().toLowerCase() || prior?.email : prior?.email;
+      if ((!otherAddress && !name) || name.length>65 || !address || address.length>180 || !validValues.ALERT_EMAIL_FROM.test(address)) {
+        return {error:'Enter the member’s name and a valid email address.',invalid:true};
+      }
+      const person=typeof input.telegram==='string' && input.telegram ? info.people.find(item=>item.id===input.telegram) : otherTelegram;
+      if (input.telegram && !person) return {error:'That Telegram responder is no longer paired.'};
+      const byEmail=members.find(member=>member.email===address);
+      const byTelegram=person && members.find(member=>sameTelegram(member.telegram,person));
+      const original=prior || (!input.id ? byEmail : undefined);
+      if ((byEmail && byEmail!==original) || (byTelegram && byTelegram!==original) ||
+          (original && person && info.people.some(item=>sameTelegram(item,original.telegram)) && !sameTelegram(original.telegram,person))) {
+        return {error:'That email or Telegram chat already belongs to another profile.'};
+      }
+      const oldAddress=original?.email || otherAddress;
+      const next=recipients.filter(item=>item!==oldAddress);
+      if (!next.includes(address)) next.push(address);
+      if (next.length>maxEmailRecipients) return {error:'The email recipient list is full.'};
+      const member=otherAddress ? null : {id:original?.id || randomUUID(),name,email:address,
+        invite:person ? undefined : original?.invite,telegram:person ? telegramIdentity(person) : original?.telegram};
+      await saveLocal(contactPath,{...contacts,email:next,members:member?[...members.filter(item=>item!==original),member]:members});
+      return {member:member ? memberStatus(member,info.people,next) : {id:emailContactId(address),email:mask('email',address)},
+        confirmAddress:recipients.includes(address)?undefined:address};
+    } finally { saving=false; }
+  }
+
+  async function deliveryConfig() {
+    const config=await loadConfig();
+    if (config.targets.telegram.length && await telegram.defaultRecipientRemoved()) config.targets.telegram=[];
+    return config;
+  }
+  async function getMemberInvite(input,token) {
+    if (saving) return {error:'Another settings update is in progress. Try again.'};
+    saving=true;
+    try {
+      const contacts=await readObject(contactPath);
+      const members=teamMembers(contacts);
+      const member=members.find(item=>item.id===input.member);
+      if (!member) return {error:'Save the team member before creating their Telegram link.'};
+      if (member.telegram && (await telegram.list()).people.some(person=>sameTelegram(person,member.telegram))) {
+        return {error:'This team member already has a linked Telegram chat.'};
+      }
+      const bot=token.split(':')[0];
+      let invite=member.invite;
+      if (input.regenerate===true || !invite || invite.bot!==bot || invite.expires<=Date.now()) {
+        let username=await telegram.cachedBotUsername(token);
+        if (!username) {
+          const account=await call(token,'getMe');
+          username=account.result?.username;
+          if (!account.ok || !/^[a-z0-9_]{5,64}$/i.test(username || '')) {
+            return {error:account.http===0?'Aurelis needs to reach Telegram once to look up this bot’s username.':
+              'Telegram did not recognize this bot token.'};
+          }
+          const hook=await call(token,'getWebhookInfo');
+          if (hook.result?.url) return {error:'This bot has a webhook configured. Use a bot that Aurelis can poll for replies.'};
+          await telegram.rememberBotUsername(token,username);
+        }
+        const id=randomUUID();
+        invite={id,bot,username,code:'ic_'+id.replace(/-/g,''),expires:Date.now()+30*60_000};
+        member.invite=invite;
+        await saveLocal(contactPath,{...contacts,members});
+        for (const [key,entry] of discoveries) if (entry.member===member.id) discoveries.delete(key);
+      }
+      restoreMemberInvites(token,contacts);
+      return {id:invite.id,url:`https://t.me/${invite.username}?start=${invite.code}`,expires:invite.expires,name:member.name};
+    } finally { saving=false; }
+  }
+  function completeMemberPairing(entry) {
+    if (entry.result) return Promise.resolve(entry.result);
+    if (entry.pairing) return entry.pairing;
+    if (saving) return Promise.resolve({found:false});
+    saving=true;
+    entry.pairing=(async()=>{
+      const contacts=await readObject(contactPath);
+      const members=teamMembers(contacts);
+      const member=members.find(person=>person.id===entry.member);
+      if (!member || member.invite?.id!==entry.id) return entry.result={error:'This link was replaced. Open the latest Telegram link.'};
+      if (member.invite.chatId!==entry.chatId) {
+        member.invite.chatId=entry.chatId;
+        await saveLocal(contactPath,{...contacts,members});
+      }
+      const chat=await call(entry.token,'getChat',{chat_id:entry.chatId});
+      if (!chat.ok && (chat.http===0 || chat.http===429 || chat.http>=500)) {
+        return {found:false,detail:'Telegram received Start. Aurelis is retrying verification of the private chat.'};
+      }
+      if (!chat.ok || chat.result?.type!=='private' || String(chat.result.id)!==entry.chatId) {
+        return entry.result={error:'Telegram could not verify the private chat. Create another pairing link.'};
+      }
+      const person=await telegram.register(entry.token,entry.chatId,member.name,'responder',{keepLabel:true});
+      if (!person) return entry.result={error:'Could not link this Telegram chat. Check the bot configuration and responder limit.'};
+      if (members.some(item=>item.id!==member.id && sameTelegram(item.telegram,person))) {
+        return entry.result={error:'That Telegram chat already belongs to another team member.'};
+      }
+      if (member.telegram && !sameTelegram(member.telegram,person) && (await telegram.list()).people.some(item=>sameTelegram(item,member.telegram))) {
+        return entry.result={error:'A Telegram chat is already linked to this team member.'};
+      }
+      member.telegram=telegramIdentity(person);
+      delete member.invite;
+      await saveLocal(contactPath,{...contacts,members});
+      return entry.result={found:true,saved:true,detail:`${member.name} is linked to Telegram and their saved email.`};
+    })().finally(()=>{saving=false;delete entry.pairing;});
+    return entry.pairing;
+  }
   return async (req,res,path)=>{
     if (req.headers.host !== `127.0.0.1:${port}`) return json(res,403,{error:'Open Aurelis on its local address.'});
     if (path==='/api/alerts/status' && req.method==='GET') {
-      const [config,automatic]=await Promise.all([loadConfig(),email.status()]);
+      const [config,automatic]=await Promise.all([deliveryConfig(),email.status()]);
       const emailLog=automatic.deliveries.map(({recipient,incident,level,status,time,detail})=>
         ({channel:'email',destination:mask('email',recipient),incident,level,status,time,detail}));
       return json(res,200,{channels:channelStatus(config),emailAutomatic:automatic.enabled,
         deliveries:[...deliveries,...emailLog].sort((a,b)=>b.time-a.time).slice(0,20)});
     }
-    if (path==='/api/alerts/telegram-routing' && req.method==='GET') return json(res,200,await telegram.list());
+    if (path==='/api/alerts/telegram-routing' && req.method==='GET') {
+      const [info,contacts]=await Promise.all([telegram.list(),readObject(contactPath)]);
+      const recipients=emailRecipients(contacts).slice(0,maxEmailRecipients);
+      const members=teamMembers(contacts);
+      return json(res,200,{...info,members:members.map(member=>memberStatus(member,info.people,recipients)),
+        unlinkedEmail:recipients.filter(address=>!members.some(member=>member.email===address))
+          .map(address=>({id:emailContactId(address),email:mask('email',address)}))});
+    }
     if (path==='/api/alerts/telegram-report-events' && req.method==='GET') return json(res,200,await telegram.reportEvents());
     if (req.method!=='POST' || req.headers.origin!==origin || req.headers['content-type']?.split(';',1)[0].trim()!=='application/json') {
       return json(res,403,{error:'Use the local Aurelis dashboard.'});
     }
     const input=await readJson(req);
     if (!input || Array.isArray(input) || typeof input!=='object') return json(res,400,{error:'Invalid request.'});
+    if (path==='/api/alerts/team-members') {
+      const {invalid,error,confirmAddress,...result}=await updateTeamMembers(input);
+      if (error) return json(res,invalid?400:409,{error});
+      const confirmation=confirmAddress ? await confirmMemberEmail(confirmAddress) : undefined;
+      return json(res,200,{...result,confirmation});
+    }
     if (path==='/api/alerts/telegram-route-preview') {
       const result=await telegram.preview(input);
       if (result.canStart) result.emailRecipients=await emailCopyRecipients();
@@ -337,13 +540,24 @@ export function createAlertApi({port,json,request = fetch}) {
         const routeMode=['team','responder'].includes(input.mode) ? input.mode : null;
         const token=routeMode ? (await loadConfig()).settings.TELEGRAM_BOT_TOKEN : input.token;
         if (typeof token!=='string' || !validValues.TELEGRAM_BOT_TOKEN.test(token)) return json(res,400,{error:'Connect the BotFather token first.'});
-        if (discoveries.size>=12) return json(res,429,{error:'Too many active chat searches. Try again in a few minutes.'});
+        if (routeMode==='responder' && typeof input.member==='string') {
+          const invite=await getMemberInvite(input,token);
+          return json(res,invite.error?409:200,invite);
+        }
         const label=String(input.label||'').trim().slice(0,65);
+        if (discoveries.size>=12) return json(res,429,{error:'Too many active chat searches. Try again in a few minutes.'});
         if(routeMode==='responder'&&!label)return json(res,400,{error:'Enter a name for the responder.'});
         const bot=await providerJson(request,telegramUrl(token,'getMe'));
+        if (bot.http===0) return json(res,503,{error:'This computer could not reach Telegram. Try generating the link again when the connection is back.'});
         const username=bot.data?.result?.username;
         if (!bot.ok || !bot.data?.ok || typeof username!=='string' || !/^[a-z0-9_]{5,64}$/i.test(username)) {
           return json(res,400,{error:'Telegram did not recognize this bot token.'});
+        }
+        if (routeMode) {
+          const hook=await call(token,'getWebhookInfo');
+          if (!hook.ok) return json(res,503,{error:'Telegram could not verify this bot’s update connection.'});
+          if (hook.result?.url) return json(res,409,{error:'This bot has a webhook configured. Use a bot that Aurelis can poll for replies.'});
+          await telegram.rememberBotUsername(token,username);
         }
         const id=randomUUID();
         const code='ic_'+id.replace(/-/g,'').slice(0,18);
@@ -352,9 +566,18 @@ export function createAlertApi({port,json,request = fetch}) {
         setTimeout(()=>discoveries.delete(id),5*60_000).unref();
         return json(res,200,{id,url:`https://t.me/${username}?${routeMode==='team'?'startgroup':'start'}=${code}`,groupCommand:`/start@${username} ${code}`});
       }
+      if (!discoveries.has(input.id)) {
+        const {settings,contacts}=await loadConfig();
+        restoreMemberInvites(settings.TELEGRAM_BOT_TOKEN,contacts);
+      }
       const entry=discoveries.get(input.id);
       if (input.action!=='check' || !entry) return json(res,409,{error:'Start a new chat search.'});
+      if (entry.member) {
+        const result=entry.chatId ? await completeMemberPairing(entry) : {found:false,detail:entry.pollError};
+        return json(res,result.error?409:200,result);
+      }
       if(!entry.chatId){
+        if (entry.token===(await loadConfig()).settings.TELEGRAM_BOT_TOKEN) return json(res,200,{found:false,detail:entry.pollError});
         const updates=await providerJson(request,telegramUrl(entry.token,'getUpdates')+'?limit=100&timeout=0');
         if ((!updates.ok||!updates.data?.ok)&&!entry.chatId) return json(res,400,{error:'Telegram could not read bot updates. If another app uses this bot, pair a dedicated one.'});
         findPairing(entry,updates.data?.result);
@@ -393,7 +616,7 @@ export function createAlertApi({port,json,request = fetch}) {
       const fields=Object.entries(input.fields).map(([name,value])=>[name,
         name==='GMAIL_APP_PASSWORD' && typeof value==='string' ? value.replace(/\s/g,'') : value]);
       const recipients=input.recipients;
-      const validRecipients=isEmail && Array.isArray(recipients) && recipients.length<=8 &&
+      const validRecipients=isEmail && Array.isArray(recipients) && recipients.length<=maxEmailRecipients &&
         recipients.every(value=>typeof value==='string' && value.length<=180 && validValues.ALERT_EMAIL_FROM.test(value));
       if (!provider.keys || (!isEmail&&!fields.length) || (recipients!==undefined&&!validRecipients) ||
           fields.some(([name,value])=>!provider.keys.includes(name) || typeof value!=='string' || !validValues[name].test(value))) {
@@ -423,7 +646,7 @@ export function createAlertApi({port,json,request = fetch}) {
       if (!incident || !levels.includes(input.level) || !Array.isArray(input.targets) || input.targets.length>17) {
         return json(res,400,{error:'Choose an incident and priority.'});
       }
-      const config=await loadConfig();
+      const config=await deliveryConfig();
       const available=channelStatus(config);
       const targets=[...new Set(input.targets)].map(id=>{
         const channel=Object.keys(routes).find(key=>available[key].recipients.some(target=>target.id===id));
@@ -443,7 +666,7 @@ export function createAlertApi({port,json,request = fetch}) {
     if (path==='/api/alerts/send') {
       const preview=previews.get(input.token);
       if (input.confirm!==true || !preview?.targets.length) return json(res,409,{error:'Review a fresh preview and confirm the recipients.'});
-      const config=await loadConfig();
+      const config=await deliveryConfig();
       const available=channelStatus(config);
       if (preview.targets.some(target=>!available[target.channel].configured || !config.targets[target.channel].includes(target.recipient))) {
         return json(res,409,{error:'A selected provider or recipient is unavailable. Review the channel setup.'});

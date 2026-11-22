@@ -209,6 +209,23 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
     assert.match(sent.at(-1).text,/Immediate routing/);
     assert.equal(automaticEmails.filter(alert=>alert.incident===page.route.incident).length,1);
   });
+  await t.test('removing the default responder moves unanswered and new alerts to the team',async()=>{
+    const page=await record('SIM-A7777777','P2');
+    await router.step();
+    assert.equal(sent.at(-1).chat_id,owner);
+    const prior=(await router.list()).people.find(person=>person.id==='default');
+    await router.removeResponder(prior);
+    assert.equal(await router.defaultRecipientRemoved(),true);
+    assert.equal((await router.list()).auto.owner,'');
+    await router.step();
+    assert.equal(sent.at(-1).chat_id,team.chat);
+    assert.equal((await router.list()).routes.find(route=>route.id===page.route.id).stage,'open-team');
+    const next=await record('SIM-A8888888','P2');
+    assert.equal(next.route.stage,'queued-team');
+    await router.step();
+    assert.equal(sent.at(-1).chat_id,team.chat);
+    assert.match(sent.at(-1).text,/No private responder assigned/);
+  });
   await t.test('new incidents can email independently of Telegram automation at any priority',async()=>{
     await router.configureAuto({enabled:false});
     const result=await record('SIM-A5555555','P1');

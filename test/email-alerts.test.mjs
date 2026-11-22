@@ -49,3 +49,31 @@ test('an interrupted SMTP submission is marked unknown without sending it again'
   await email.step();
   assert.equal((await email.status()).deliveries[0].status,'unknown');
 });
+
+test('a confirmation waits through a DNS failure and retries even when automatic alerts are off',async t=>{
+  const folder=await mkdtemp(join(tmpdir(),'aurelis-email-'));
+  const path=pathToFileURL(join(folder,'.alert-email.local.json'));
+  t.after(()=>rm(folder,{recursive:true,force:true}));
+  const recipient='team@example.com';
+  let time=1_000;
+  let attempts=0;
+  const options={path,now:()=>time,config:async()=>({ready:true,recipients:[recipient],settings:{}}),
+    deliver:async()=>++attempts===1?{status:'unavailable',detail:'DNS lookup failed.'}:{status:'accepted'}};
+  const email=createEmailOutbox(options);
+  await email.retryConfirmation(recipient,{subject:'Email setup',text:'Test confirmation'},'Waiting for DNS.');
+  await email.retryConfirmation(recipient,{subject:'Duplicate',text:'Test confirmation'},'Waiting for DNS.');
+  assert.equal((await email.status()).deliveries.length,1);
+  await email.enable(false);
+  await email.step();
+  assert.equal(attempts,0);
+  time+=30_000;
+  await email.step();
+  assert.equal(attempts,1);
+  assert.equal(await email.hasPendingConfirmation(recipient),true);
+  const restarted=createEmailOutbox(options);
+  time+=30_000;
+  await restarted.step();
+  assert.equal(attempts,2);
+  assert.equal(await restarted.hasPendingConfirmation(recipient),false);
+  assert.equal((await restarted.status()).deliveries[0].status,'accepted');
+});

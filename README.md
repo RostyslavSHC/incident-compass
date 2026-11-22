@@ -52,6 +52,12 @@ Run `npm ci` to install Gmail SMTP support, then start the local server. Open **
 
 Use **Check connection** to verify the sign-in and **Send test email** to send one demo message per saved recipient. Confirm inbox delivery, then select **Enable automatic email**. It sends an informational copy of each new incident or confirmed Telegram alert. Each recipient gets one copy per alert or route, including when a private page escalates. Accept, decline, and mark incidents fixed in Telegram. Changing email credentials or recipients turns automatic email off until enabled again. Resend remains available if you already have a verified sending domain.
 
+To add someone from the dashboard, open the responder picker and select **Add team member**. Enter the member’s name and Outlook email address. Select a chat that is already paired or copy a one-time link for the member to open and tap **Start** in Telegram. Aurelis shows both linked channels on one profile. Email goes to all saved recipients when automatic email is enabled. Private Telegram pages still go to the selected responder, and adding a private chat does not add its owner to the Telegram group.
+
+Use **Manage people** in the responder menu to change an email address, resend its confirmation, or remove a recipient. Saving a new address sends a confirmation email to that address, including when automatic incident email is off. Removing a linked member stops email copies and future private pages for that profile. Unanswered Telegram pages go to the paired team group. Manage group membership in Telegram.
+
+For a pending pairing, choose **Manage people → Telegram link** to reopen the saved invite. Choose **Regenerate link** to replace it. The invite is valid for 30 minutes. Aurelis can prepare the link while offline if it already knows the bot’s username. The member’s **Start** still needs a connection to reach Aurelis. When Gmail fails before submission, Aurelis queues the confirmation for retry for up to a day.
+
 ## Demo path
 
 1. **After a release** shows the checkout failure and the recent Payments API release. Open **Investigation log** for the actual record lookups and **Time Machine** to move between the alert at 10:02 and the provider bulletin at 10:07. The bulletin's availability time differs from the provider's estimated outage start.
