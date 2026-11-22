@@ -204,14 +204,24 @@ input[type="checkbox"],input[type="range"] {accent-color:var(--green)}
 .top nav a[aria-current]:hover {background:var(--ink);color:var(--paper)}
 .nav-toggle {display:none}
 .count-pill {display:inline-grid;place-items:center;min-width:1.35em;padding:0 .25em;margin-left:.24em;background:var(--ink);color:var(--paper);font:700 .72rem/1.45 var(--mono)}
+:is(.workspace-arrival,.top .brand,.top nav,.top .nav-toggle,.top-right) {
+  animation:workspace-arrive 430ms var(--ease) var(--opening-delay,0ms) backwards;
+}
+.top :is(nav,.nav-toggle) {--opening-delay:30ms}
+.top-right {--opening-delay:62ms}
+:is(.workspace-arrival,.top .brand,.top nav,.top .nav-toggle,.top-right):focus-within {animation-name:none}
+@keyframes workspace-arrive {
+  from {opacity:0;transform:translateY(12px)}
+  to {opacity:1;transform:none}
+}
 .page-enter {animation:unfold var(--motion) var(--ease) both}
 .page-enter .template-card,.page-enter .alert-card,.page-enter .service-grid button {animation:unfold 260ms var(--ease) both}
 .page-enter :is(.template-card,.alert-card,.service-grid button):nth-child(2) {animation-delay:25ms}
 .page-enter :is(.template-card,.alert-card,.service-grid button):nth-child(3) {animation-delay:50ms}
 .page-enter :is(.template-card,.alert-card,.service-grid button):nth-child(4) {animation-delay:75ms}
-.page-enter .awaiting-reveal {opacity:.78;animation:none}
+.page-enter .awaiting-reveal,main .awaiting-reveal {opacity:.78;animation:none}
 .awaiting-reveal:focus-within {opacity:1}
-.page-enter .section-revealed {animation:unfold var(--motion) var(--ease) both;animation-delay:0s}
+.page-enter .section-revealed,main .section-revealed {animation:unfold var(--motion) var(--ease) both;animation-delay:0s}
 .alert-card,.template-card,.service-grid button {transition:box-shadow var(--motion),transform var(--motion) var(--ease),border-color var(--fast)}
 @media(hover:hover) {
   .alert-card:hover,.template-card:hover,.service-grid button:hover {box-shadow:var(--lift);transform:translateY(-2px)}
@@ -317,7 +327,7 @@ details[open] > :not(summary) {animation:unfold var(--fast) var(--ease) both}
 }
 @media(prefers-reduced-motion:reduce) {
   *,*::before,*::after {animation:none!important;transition:none!important;scroll-behavior:auto!important}
-  .page-enter .awaiting-reveal {opacity:1}
+  .page-enter .awaiting-reveal,main .awaiting-reveal {opacity:1}
   .toast-progress {display:none}
 }
 
@@ -680,6 +690,7 @@ const persona = document.querySelector('#persona');
 const night = document.querySelector('#night');
 const saveKey = 'incident-compass-workspace-v1';
 const windowMs = 30_000;
+const openingSequenceMs = 750;
 const tabs = [['brief','Brief'],['details','Case details'],['runbook','Runbooks'],['trace','Investigation log'],['replay','Time Machine'],['compare','Compare']];
 const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','chat'];
 const byId = (id,state = workspace) => state.custom[id]
@@ -737,6 +748,7 @@ let alertFilter = 'all';
 let alertSort = 'severity';
 let alertQuery = '';
 let renderedPage;
+let openingStartedAt;
 let revealObserver;
 let simulatorDraft = {};
 let notificationHistory = false;
@@ -1413,7 +1425,9 @@ function render() {
   const focusedId = main.contains(focused) && focused.id;
   const previousStats = new Map([...main.querySelectorAll('[data-stat]')].map(item=>[item.dataset.stat,Number(item.textContent)]));
   const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const queuePositions = animate && page===renderedPage && page==='desk'
+  const openingElapsed = openingStartedAt===undefined ? Infinity : performance.now() - openingStartedAt;
+  const continuingEntrance = animate && page===renderedPage && openingElapsed<openingSequenceMs;
+  const queuePositions = animate && !continuingEntrance && page===renderedPage && page==='desk'
     ? new Map([...main.querySelectorAll('.queue-item')].slice(0,12).map(item=>[item.dataset.case,item.getBoundingClientRect().top]))
     : new Map();
   const content = {
@@ -1424,8 +1438,19 @@ function render() {
   };
   main.innerHTML = content[page]();
   if (page!==renderedPage) {
-    main.firstElementChild?.classList.add('page-enter');
+    if (renderedPage===undefined) {
+      if (animate) {
+        openingStartedAt = performance.now();
+        playWorkspaceEntrance(page);
+      }
+    } else {
+      openingStartedAt = undefined;
+      main.firstElementChild?.classList.add('page-enter');
+    }
     renderedPage = page;
+    observeSectionReveals(animate);
+  } else if (continuingEntrance) {
+    playWorkspaceEntrance(page,openingElapsed);
     observeSectionReveals(animate);
   } else {
     revealObserver?.disconnect();
@@ -1472,6 +1497,30 @@ function render() {
   }
 }
 
+function playWorkspaceEntrance(page,elapsed=0) {
+  const surfaces = page==='desk' ? [
+    ['.hero > div:first-child',54], ['.hero > .radar',105], ['.stats > .stat',130,24],
+    ['.desk > .queue',224], ['.desk > .case',281],
+  ] : [
+    ['.page-hero',54], ['.page > .row, .simulation-banner, .template-section > h2, .alert-tools',116,34],
+    ['.template-grid > li, .alert-list > li, .service-grid > *, .page > .archive > li, .page > .channel > li',172,30],
+    ['.simulator-grid > .panel, .page > .duo > .panel',236,48],
+  ];
+  const viewportBottom = window.innerHeight;
+  const entrances = [...surfaces,['.frame > footer',320]].flatMap(([selector,delay,step=0])=>
+    [...document.querySelectorAll(selector)].slice(0,12).map((element,index)=>({
+      element,delay:Math.min(320,delay+index*step),
+    }))
+  ).filter(({element})=>{
+    const bounds = element.getBoundingClientRect();
+    return bounds.height>0 && bounds.bottom>0 && bounds.top<viewportBottom;
+  });
+  for (const {element,delay} of entrances) {
+    element.style.setProperty('--opening-delay',`${delay-elapsed}ms`);
+    element.classList.add('workspace-arrival');
+  }
+}
+
 function observeSectionReveals(animate) {
   revealObserver?.disconnect();
   if (!animate || !('IntersectionObserver' in window)) return;
@@ -1483,7 +1532,8 @@ function observeSectionReveals(animate) {
       observer.unobserve(entry.target);
     }
   },{rootMargin:'0px 0px 28px'});
-  const belowFold = [...main.querySelectorAll('.template-card,.simulator-grid,.alert-card,.service-grid button')]
+  const panels = '.desk > .queue,.desk > .case,.simulator-grid > .panel,.page > .duo > .panel';
+  const belowFold = [...main.querySelectorAll(panels+',.template-card,.alert-card,.service-grid button')]
     .filter(element=>element.getBoundingClientRect().top>window.innerHeight+60);
   for (const element of belowFold) {
     element.classList.add('awaiting-reveal');

@@ -196,14 +196,24 @@ input[type="checkbox"],input[type="range"] {accent-color:var(--green)}
 .top nav a[aria-current]:hover {background:var(--ink);color:var(--paper)}
 .nav-toggle {display:none}
 .count-pill {display:inline-grid;place-items:center;min-width:1.35em;padding:0 .25em;margin-left:.24em;background:var(--ink);color:var(--paper);font:700 .72rem/1.45 var(--mono)}
+:is(.workspace-arrival,.top .brand,.top nav,.top .nav-toggle,.top-right) {
+  animation:workspace-arrive 430ms var(--ease) var(--opening-delay,0ms) backwards;
+}
+.top :is(nav,.nav-toggle) {--opening-delay:30ms}
+.top-right {--opening-delay:62ms}
+:is(.workspace-arrival,.top .brand,.top nav,.top .nav-toggle,.top-right):focus-within {animation-name:none}
+@keyframes workspace-arrive {
+  from {opacity:0;transform:translateY(12px)}
+  to {opacity:1;transform:none}
+}
 .page-enter {animation:unfold var(--motion) var(--ease) both}
 .page-enter .template-card,.page-enter .alert-card,.page-enter .service-grid button {animation:unfold 260ms var(--ease) both}
 .page-enter :is(.template-card,.alert-card,.service-grid button):nth-child(2) {animation-delay:25ms}
 .page-enter :is(.template-card,.alert-card,.service-grid button):nth-child(3) {animation-delay:50ms}
 .page-enter :is(.template-card,.alert-card,.service-grid button):nth-child(4) {animation-delay:75ms}
-.page-enter .awaiting-reveal {opacity:.78;animation:none}
+.page-enter .awaiting-reveal,main .awaiting-reveal {opacity:.78;animation:none}
 .awaiting-reveal:focus-within {opacity:1}
-.page-enter .section-revealed {animation:unfold var(--motion) var(--ease) both;animation-delay:0s}
+.page-enter .section-revealed,main .section-revealed {animation:unfold var(--motion) var(--ease) both;animation-delay:0s}
 .alert-card,.template-card,.service-grid button {transition:box-shadow var(--motion),transform var(--motion) var(--ease),border-color var(--fast)}
 @media(hover:hover) {
   .alert-card:hover,.template-card:hover,.service-grid button:hover {box-shadow:var(--lift);transform:translateY(-2px)}
@@ -309,6 +319,6 @@ details[open] > :not(summary) {animation:unfold var(--fast) var(--ease) both}
 }
 @media(prefers-reduced-motion:reduce) {
   *,*::before,*::after {animation:none!important;transition:none!important;scroll-behavior:auto!important}
-  .page-enter .awaiting-reveal {opacity:1}
+  .page-enter .awaiting-reveal,main .awaiting-reveal {opacity:1}
   .toast-progress {display:none}
 }

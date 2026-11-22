@@ -11,6 +11,7 @@ const persona = document.querySelector('#persona');
 const night = document.querySelector('#night');
 const saveKey = 'incident-compass-workspace-v1';
 const windowMs = 30_000;
+const openingSequenceMs = 750;
 const tabs = [['brief','Brief'],['details','Case details'],['runbook','Runbooks'],['trace','Investigation log'],['replay','Time Machine'],['compare','Compare']];
 const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','chat'];
 const byId = (id,state = workspace) => state.custom[id]
@@ -68,6 +69,7 @@ let alertFilter = 'all';
 let alertSort = 'severity';
 let alertQuery = '';
 let renderedPage;
+let openingStartedAt;
 let revealObserver;
 let simulatorDraft = {};
 let notificationHistory = false;
@@ -744,7 +746,9 @@ function render() {
   const focusedId = main.contains(focused) && focused.id;
   const previousStats = new Map([...main.querySelectorAll('[data-stat]')].map(item=>[item.dataset.stat,Number(item.textContent)]));
   const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const queuePositions = animate && page===renderedPage && page==='desk'
+  const openingElapsed = openingStartedAt===undefined ? Infinity : performance.now() - openingStartedAt;
+  const continuingEntrance = animate && page===renderedPage && openingElapsed<openingSequenceMs;
+  const queuePositions = animate && !continuingEntrance && page===renderedPage && page==='desk'
     ? new Map([...main.querySelectorAll('.queue-item')].slice(0,12).map(item=>[item.dataset.case,item.getBoundingClientRect().top]))
     : new Map();
   const content = {
@@ -755,8 +759,19 @@ function render() {
   };
   main.innerHTML = content[page]();
   if (page!==renderedPage) {
-    main.firstElementChild?.classList.add('page-enter');
+    if (renderedPage===undefined) {
+      if (animate) {
+        openingStartedAt = performance.now();
+        playWorkspaceEntrance(page);
+      }
+    } else {
+      openingStartedAt = undefined;
+      main.firstElementChild?.classList.add('page-enter');
+    }
     renderedPage = page;
+    observeSectionReveals(animate);
+  } else if (continuingEntrance) {
+    playWorkspaceEntrance(page,openingElapsed);
     observeSectionReveals(animate);
   } else {
     revealObserver?.disconnect();
@@ -803,6 +818,30 @@ function render() {
   }
 }
 
+function playWorkspaceEntrance(page,elapsed=0) {
+  const surfaces = page==='desk' ? [
+    ['.hero > div:first-child',54], ['.hero > .radar',105], ['.stats > .stat',130,24],
+    ['.desk > .queue',224], ['.desk > .case',281],
+  ] : [
+    ['.page-hero',54], ['.page > .row, .simulation-banner, .template-section > h2, .alert-tools',116,34],
+    ['.template-grid > li, .alert-list > li, .service-grid > *, .page > .archive > li, .page > .channel > li',172,30],
+    ['.simulator-grid > .panel, .page > .duo > .panel',236,48],
+  ];
+  const viewportBottom = window.innerHeight;
+  const entrances = [...surfaces,['.frame > footer',320]].flatMap(([selector,delay,step=0])=>
+    [...document.querySelectorAll(selector)].slice(0,12).map((element,index)=>({
+      element,delay:Math.min(320,delay+index*step),
+    }))
+  ).filter(({element})=>{
+    const bounds = element.getBoundingClientRect();
+    return bounds.height>0 && bounds.bottom>0 && bounds.top<viewportBottom;
+  });
+  for (const {element,delay} of entrances) {
+    element.style.setProperty('--opening-delay',`${delay-elapsed}ms`);
+    element.classList.add('workspace-arrival');
+  }
+}
+
 function observeSectionReveals(animate) {
   revealObserver?.disconnect();
   if (!animate || !('IntersectionObserver' in window)) return;
@@ -814,7 +853,8 @@ function observeSectionReveals(animate) {
       observer.unobserve(entry.target);
     }
   },{rootMargin:'0px 0px 28px'});
-  const belowFold = [...main.querySelectorAll('.template-card,.simulator-grid,.alert-card,.service-grid button')]
+  const panels = '.desk > .queue,.desk > .case,.simulator-grid > .panel,.page > .duo > .panel';
+  const belowFold = [...main.querySelectorAll(panels+',.template-card,.alert-card,.service-grid button')]
     .filter(element=>element.getBoundingClientRect().top>window.innerHeight+60);
   for (const element of belowFold) {
     element.classList.add('awaiting-reveal');
