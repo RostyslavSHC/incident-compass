@@ -11,7 +11,10 @@ const persona = document.querySelector('#persona');
 const night = document.querySelector('#night');
 const saveKey = 'incident-compass-workspace-v1';
 const windowMs = 30_000;
-const openingSequenceMs = 750;
+const entranceTimings = {
+  startup:{duration:2000,motion:1100,lead:160},
+  menu:{duration:1200,motion:640,lead:70},
+};
 const tabs = [['brief','Brief'],['details','Case details'],['runbook','Runbooks'],['trace','Investigation log'],['replay','Time Machine'],['compare','Compare']];
 const pages = ['desk','alerts','simulator','services','history','runbooks','calendar','chat'];
 const byId = (id,state = workspace) => state.custom[id]
@@ -69,7 +72,7 @@ let alertFilter = 'all';
 let alertSort = 'severity';
 let alertQuery = '';
 let renderedPage;
-let openingStartedAt;
+let workspaceEntrance;
 let revealObserver;
 let simulatorDraft = {};
 let notificationHistory = false;
@@ -746,8 +749,9 @@ function render() {
   const focusedId = main.contains(focused) && focused.id;
   const previousStats = new Map([...main.querySelectorAll('[data-stat]')].map(item=>[item.dataset.stat,Number(item.textContent)]));
   const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const openingElapsed = openingStartedAt===undefined ? Infinity : performance.now() - openingStartedAt;
-  const continuingEntrance = animate && page===renderedPage && openingElapsed<openingSequenceMs;
+  const pageChanged = page!==renderedPage;
+  const openingElapsed = workspaceEntrance ? performance.now() - workspaceEntrance.startedAt : Infinity;
+  const continuingEntrance = animate && !pageChanged && workspaceEntrance && openingElapsed<workspaceEntrance.duration;
   const queuePositions = animate && !continuingEntrance && page===renderedPage && page==='desk'
     ? new Map([...main.querySelectorAll('.queue-item')].slice(0,12).map(item=>[item.dataset.case,item.getBoundingClientRect().top]))
     : new Map();
@@ -758,20 +762,17 @@ function render() {
     runbooks:()=>layout('Runbook library.','Search the sample database for service procedures, recovery checks, and investigation guides.',`<ul class="archive" id="list">${documentList()}</ul>`,true)
   };
   main.innerHTML = content[page]();
-  if (page!==renderedPage) {
-    if (renderedPage===undefined) {
-      if (animate) {
-        openingStartedAt = performance.now();
-        playWorkspaceEntrance(page);
-      }
-    } else {
-      openingStartedAt = undefined;
-      main.firstElementChild?.classList.add('page-enter');
+  if (pageChanged) {
+    const initial = renderedPage===undefined;
+    workspaceEntrance = undefined;
+    if (animate) {
+      workspaceEntrance = {...entranceTimings[initial?'startup':'menu'],initial,startedAt:performance.now()};
+      playWorkspaceEntrance(page,workspaceEntrance);
     }
     renderedPage = page;
     observeSectionReveals(animate);
   } else if (continuingEntrance) {
-    playWorkspaceEntrance(page,openingElapsed);
+    playWorkspaceEntrance(page,workspaceEntrance,openingElapsed);
     observeSectionReveals(animate);
   } else {
     revealObserver?.disconnect();
@@ -818,26 +819,39 @@ function render() {
   }
 }
 
-function playWorkspaceEntrance(page,elapsed=0) {
+function playWorkspaceEntrance(page,entrance,elapsed=0) {
   const surfaces = page==='desk' ? [
-    ['.hero > div:first-child',54], ['.hero > .radar',105], ['.stats > .stat',130,24],
-    ['.desk > .queue',224], ['.desk > .case',281],
+    ['.hero > div:first-child',94], ['.hero > .radar',158], ['.stats > .stat',220,48],
+    ['.desk > .queue',400], ['.desk > .case',510],
   ] : [
-    ['.page-hero',54], ['.page > .row, .simulation-banner, .template-section > h2, .alert-tools',116,34],
-    ['.template-grid > li, .alert-list > li, .service-grid > *, .page > .archive > li, .page > .channel > li',172,30],
-    ['.simulator-grid > .panel, .page > .duo > .panel',236,48],
+    ['.page-hero',94], ['.page > .row, .simulation-banner, .template-section > h2, .alert-tools',174,54],
+    ['.template-grid > li, .alert-list > li, .service-grid > *, .page > .archive > li, .page > .channel > li',277,46],
+    ['.simulator-grid > .panel, .page > .duo > .panel',485,70],
   ];
   const viewportBottom = window.innerHeight;
-  const entrances = [...surfaces,['.frame > footer',320]].flatMap(([selector,delay,step=0])=>
+  const lastStage = 560;
+  if (entrance.initial) surfaces.push(['.frame > footer',lastStage]);
+  const entrances = surfaces.flatMap(([selector,stage,step=0])=>
     [...document.querySelectorAll(selector)].slice(0,12).map((element,index)=>({
-      element,delay:Math.min(320,delay+index*step),
+      element,stage:Math.min(lastStage,stage+index*step),
     }))
   ).filter(({element})=>{
     const bounds = element.getBoundingClientRect();
     return bounds.height>0 && bounds.bottom>0 && bounds.top<viewportBottom;
   });
-  for (const {element,delay} of entrances) {
+  if (!entrances.length) return;
+  entrance.firstStage ??= Math.min(...entrances.map(item=>item.stage));
+  entrance.lastStage ??= Math.max(...entrances.map(item=>item.stage));
+  const {duration,motion,lead,firstStage,lastStage:finalStage} = entrance;
+  const range = finalStage - firstStage;
+  const elementDuration = range ? motion : duration-lead;
+  for (const {element,stage} of entrances) {
+    if (elapsed && !main.contains(element)) continue;
+    const progress = range ? (Math.min(finalStage,Math.max(firstStage,stage))-firstStage)/range : 0;
+    const delay = lead + Math.round((duration-elementDuration-lead)*progress);
+    if (elapsed>=delay+elementDuration) continue;
     element.style.setProperty('--opening-delay',`${delay-elapsed}ms`);
+    element.style.setProperty('--opening-duration',`${elementDuration}ms`);
     element.classList.add('workspace-arrival');
   }
 }
@@ -1945,7 +1959,8 @@ window.addEventListener('storage',event=>{
 window.addEventListener('hashchange',()=>{
   if (location.hash==='#main') return;
   document.querySelector('#nav-toggle').setAttribute('aria-expanded','false');
-  query=''; render(); main.focus();
+  if (view()!==renderedPage) window.scrollTo({top:0,behavior:'instant'});
+  query=''; render(); main.focus({preventScroll:true});
 });
 document.querySelector('#nav-toggle').addEventListener('click',event=>{
   const control = event.currentTarget;

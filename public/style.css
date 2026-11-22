@@ -197,23 +197,23 @@ input[type="checkbox"],input[type="range"] {accent-color:var(--green)}
 .nav-toggle {display:none}
 .count-pill {display:inline-grid;place-items:center;min-width:1.35em;padding:0 .25em;margin-left:.24em;background:var(--ink);color:var(--paper);font:700 .72rem/1.45 var(--mono)}
 :is(.workspace-arrival,.top .brand,.top nav,.top .nav-toggle,.top-right) {
-  animation:workspace-arrive 430ms var(--ease) var(--opening-delay,0ms) backwards;
+  animation:workspace-arrive var(--opening-duration,1100ms) var(--ease) var(--opening-delay,0ms) backwards;
 }
-.top :is(nav,.nav-toggle) {--opening-delay:30ms}
-.top-right {--opening-delay:62ms}
+.top {--opening-y:8px}
+.top :is(nav,.nav-toggle) {--opening-delay:90ms}
+.top-right {--opening-delay:145ms}
+.radar.workspace-arrival {--opening-scale:.94}
+.desk > .queue.workspace-arrival {--opening-x:-10px}
+.desk > .case.workspace-arrival {--opening-x:12px}
 :is(.workspace-arrival,.top .brand,.top nav,.top .nav-toggle,.top-right):focus-within {animation-name:none}
 @keyframes workspace-arrive {
-  from {opacity:0;transform:translateY(12px)}
+  from {opacity:0;transform:translate(var(--opening-x,0px),var(--opening-y,20px)) scale(var(--opening-scale,.982))}
+  68% {opacity:1;transform:translateY(-2px) scale(1.004)}
   to {opacity:1;transform:none}
 }
-.page-enter {animation:unfold var(--motion) var(--ease) both}
-.page-enter .template-card,.page-enter .alert-card,.page-enter .service-grid button {animation:unfold 260ms var(--ease) both}
-.page-enter :is(.template-card,.alert-card,.service-grid button):nth-child(2) {animation-delay:25ms}
-.page-enter :is(.template-card,.alert-card,.service-grid button):nth-child(3) {animation-delay:50ms}
-.page-enter :is(.template-card,.alert-card,.service-grid button):nth-child(4) {animation-delay:75ms}
-.page-enter .awaiting-reveal,main .awaiting-reveal {opacity:.78;animation:none}
+main .awaiting-reveal {opacity:.78;animation:none}
 .awaiting-reveal:focus-within {opacity:1}
-.page-enter .section-revealed,main .section-revealed {animation:unfold var(--motion) var(--ease) both;animation-delay:0s}
+main .section-revealed {animation:unfold var(--motion) var(--ease) both}
 .alert-card,.template-card,.service-grid button {transition:box-shadow var(--motion),transform var(--motion) var(--ease),border-color var(--fast)}
 @media(hover:hover) {
   .alert-card:hover,.template-card:hover,.service-grid button:hover {box-shadow:var(--lift);transform:translateY(-2px)}
@@ -256,12 +256,29 @@ input[type="checkbox"],input[type="range"] {accent-color:var(--green)}
 .simulation-lead {background:var(--pale-blue);color:var(--ink);border-color:var(--blue)}
 .alert-tools {display:flex;gap:10px;flex-wrap:wrap;margin-top:15px}
 .alert-tools input {min-width:min(14rem,100%)}
-dialog {opacity:0;transform:translateY(7px) scale(.985);transition:opacity var(--fast),transform var(--motion) var(--ease),display var(--motion) allow-discrete,overlay var(--motion) allow-discrete}
-dialog[open] {opacity:1;transform:none}
-dialog::backdrop {opacity:0;transition:opacity var(--motion),display var(--motion) allow-discrete,overlay var(--motion) allow-discrete}
-dialog[open]::backdrop {opacity:1}
+dialog {
+  --dialog-motion:220ms;
+  --dialog-fade:170ms;
+  --dialog-ease:var(--ease);
+  opacity:0;transform:translateY(14px) scale(.976);
+  transition:opacity var(--dialog-fade) var(--ease),transform var(--dialog-motion) var(--dialog-ease),
+    display var(--dialog-motion) allow-discrete,overlay var(--dialog-motion) allow-discrete;
+}
+dialog:not([open]),dialog:not([open])::backdrop {pointer-events:none}
+dialog[open] {
+  --dialog-motion:440ms;
+  --dialog-fade:310ms;
+  --dialog-ease:cubic-bezier(.22,.8,.3,1.08);
+  opacity:1;transform:none;
+}
+dialog::backdrop {
+  --backdrop-motion:220ms;
+  opacity:0;
+  transition:opacity var(--backdrop-motion),display var(--backdrop-motion) allow-discrete,overlay var(--backdrop-motion) allow-discrete;
+}
+dialog[open]::backdrop {--backdrop-motion:360ms;opacity:1}
 @starting-style {
-  dialog[open] {opacity:0;transform:translateY(7px) scale(.985)}
+  dialog[open] {opacity:0;transform:translateY(14px) scale(.976)}
   dialog[open]::backdrop {opacity:0}
 }
 details[open] > :not(summary) {animation:unfold var(--fast) var(--ease) both}
@@ -303,6 +320,7 @@ details[open] > :not(summary) {animation:unfold var(--fast) var(--ease) both}
   .template-grid {grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:650px) {
+  .desk > :is(.queue,.case).workspace-arrival {--opening-x:0px}
   html {scroll-padding-top:8rem}
   .case h2 {scroll-margin-top:8rem}
   .top-right {flex-basis:100%}
@@ -319,6 +337,6 @@ details[open] > :not(summary) {animation:unfold var(--fast) var(--ease) both}
 }
 @media(prefers-reduced-motion:reduce) {
   *,*::before,*::after {animation:none!important;transition:none!important;scroll-behavior:auto!important}
-  .page-enter .awaiting-reveal,main .awaiting-reveal {opacity:1}
+  main .awaiting-reveal {opacity:1}
   .toast-progress {display:none}
 }
