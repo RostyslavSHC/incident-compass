@@ -22,6 +22,8 @@ const files = {
   '/impact.mjs':['impact.mjs','text/javascript; charset=utf-8'],
   '/pitch-qa.mjs':['pitch-qa.mjs','text/javascript; charset=utf-8'],
   '/pitch-voice.mjs':['pitch-voice.mjs','text/javascript; charset=utf-8'],
+  '/pitch-alert-answers.mjs':['pitch-alert-answers.mjs','text/javascript; charset=utf-8'],
+  '/pitch-alert-context.mjs':['pitch-alert-context.mjs','text/javascript; charset=utf-8'],
 };
 
 function json(response,status,data) {

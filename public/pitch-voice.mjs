@@ -1,4 +1,5 @@
 import {pitchFallback} from './pitch-qa.mjs';
+import {pitchAlertAnswer} from './pitch-alert-answers.mjs';
 
 const pitchRecognitionPause = 1_900;
 const pitchRecognitionLimit = 55_000;
@@ -18,7 +19,7 @@ function pitchVoiceScore(voice) {
     + (voice.localService ? 2 : 0) + (voice.default ? 1 : 0);
 }
 
-export function setupPitchVoice(dialog, shouldRequestAnswer, hasNeuralVoice) {
+export function setupPitchVoice(dialog, shouldRequestAnswer, hasNeuralVoice, getAlertContext) {
   const form = dialog.querySelector('#pitch-form');
   const question = dialog.querySelector('#pitch-question');
   const submit = form.querySelector('button[type="submit"]');
@@ -193,16 +194,18 @@ export function setupPitchVoice(dialog, shouldRequestAnswer, hasNeuralVoice) {
     status.textContent = 'Preparing an answer…';
     answer.setAttribute('aria-busy', 'true');
     updateControls();
-    let nextReply;
-    let answerMode = 'Demo answers';
-    if (shouldRequestAnswer()) {
+    let nextReply = pitchAlertAnswer(text, getAlertContext(), history);
+    const workspaceAnswer = Boolean(nextReply);
+    const projectHistory = history.filter(turn => !turn.workspace).map(({question, answer}) => ({question, answer}));
+    let answerMode = workspaceAnswer ? 'Workspace alerts' : 'Demo answers';
+    if (!workspaceAnswer && shouldRequestAnswer()) {
       const timer = setTimeout(() => pending.abort(), 8_000);
       try {
         const response = await fetch('/api/pitch-qa', {
           method: 'POST',
           signal: pending.signal,
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({question: text, history}),
+          body: JSON.stringify({question: text, history: projectHistory}),
         });
         if (response.ok) {
           const data = await response.json();
@@ -214,8 +217,8 @@ export function setupPitchVoice(dialog, shouldRequestAnswer, hasNeuralVoice) {
     }
     if (request !== pending || !dialog.open) return;
     request = null;
-    reply = nextReply || pitchFallback(text, history);
-    history.push({question: text, answer: reply});
+    reply = nextReply || pitchFallback(text, projectHistory);
+    history.push({question: text, answer: reply, workspace: workspaceAnswer});
     if (history.length > 3) history.shift();
     answer.textContent = reply;
     answer.removeAttribute('aria-busy');

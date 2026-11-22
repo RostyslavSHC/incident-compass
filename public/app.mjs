@@ -5,6 +5,7 @@ import {
 } from './simulations.mjs';
 import {acceptedIncidentWork, demoReportEvents, durationLabel, exposureAssumptions, exposureAt, mergeIncidentWork, reportPeriod, reportSummary} from './reports.mjs';
 import {createImpactView} from './impact.mjs';
+import {buildPitchAlertContext} from './pitch-alert-context.mjs';
 import {setupPitchVoice} from './pitch-voice.mjs';
 
 const main = document.querySelector('#main');
@@ -59,7 +60,7 @@ const incidentPriority = (incident,state = workspace) => state.custom[incident?.
   || state.priorities[incident?.id] || (incident ? priority(incident) : 'P3');
 const levelName = (level,isTest = false) => (isTest ? simulationSeverities : severityNames)[level] || simulationSeverities[level] || 'Info';
 const testBadge = '<span class="badge test-badge">Test event</span>';
-const openIncidents = () => workspace.active.map(id=>byId(id)).filter(Boolean);
+const openIncidents = (state = workspace) => state.active.map(id=>byId(id,state)).filter(Boolean);
 
 function initial() {
   const active = scenarios.slice(0,3).map(incident=>incident.id);
@@ -146,7 +147,7 @@ const emailSetup = {
     fields:[['RESEND_API_KEY','Resend API key',true],['ALERT_EMAIL_FROM','Verified sender address']]},
 };
 
-const refreshPitchVoices = setupPitchVoice(pitchWindow, () => connected || checkingGemini, () => localPitchVoice);
+const refreshPitchVoices = setupPitchVoice(pitchWindow, () => connected || checkingGemini, () => localPitchVoice, pitchAlertContext);
 document.querySelector('#pitch-qa').addEventListener('click', () => {
   if (assistantWindow.open) assistantWindow.close();
   pitchWindow.showModal();
@@ -1051,6 +1052,17 @@ function localReportEvents(state = workspace) {
     rows.set(row.key,reportRowFromResolution(incident,row,state.resolutions[id]) ?? row);
   }
   return [...rows.values()];
+}
+
+function pitchAlertContext() {
+  const state = read();
+  return buildPitchAlertContext({
+    state,
+    selectedId: selected,
+    openIncidents: openIncidents(state),
+    reportRows: mergeIncidentWork(localReportEvents(state), state.telegramWork),
+    investigate: incident => investigateCase(incident, '23:59', state),
+  });
 }
 
 function applyTelegramCompletion(state,route) {

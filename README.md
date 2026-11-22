@@ -56,6 +56,8 @@ The microphone uses browser dictation where available, subject to the browser's 
 
 Open **Pitch Q&A** from the header and choose **Listen** to ask a question in English. Wait for **Listening**, then speak and pause at the end of the question. Use **Finish listening** to end capture manually. The recognized words appear in the question field, and Aurelis answers aloud with the same answer on screen. Type or edit a question whenever the microphone is off. Use **Speak answers** to mute automatic playback, or select an English voice and choose **Replay voice**. With Gemini configured, the assistant answers from the project's demo and implementation facts. The bundled demo answers also work without an API key.
 
+Ask **What alerts are open right now?**, **What happened to INC-104?**, or **Which alerts were resolved?** Aurelis reads the current workspace on each question. It can describe symptoms, assigned responders, unconfirmed leads, and recorded fixes. New alerts and status changes appear on the next question. Workspace alert answers and their conversation history stay out of project Q&A requests to Gemini.
+
 To enable the optional [Kokoro neural voice](https://github.com/hexgrad/kokoro/tree/main/kokoro.js) on the local server, install `kokoro-js` and set `PITCH_KOKORO=1` in `.env` before restarting. The model downloads and warms up on the first launch. The dashboard plays audio sentence by sentence and uses a browser voice if Kokoro is unavailable. The standalone HTML uses browser voices.
 
 ```sh
