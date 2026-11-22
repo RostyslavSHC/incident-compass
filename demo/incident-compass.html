@@ -662,8 +662,12 @@ details[open] > :not(summary) {animation:unfold var(--fast) var(--ease) both}
 @keyframes loading-shift {to {background-position:-240% center}}
 @media(max-width:950px) {
   .nav-toggle {display:inline-block;margin-left:auto}
+  .top .brand {min-width:0;max-width:100%;white-space:normal}
+  .brand-copy {min-width:0}
+  .top:has(#nav-toggle[aria-expanded="true"]) {max-height:100dvh;overflow-y:auto}
   #workspace-nav {max-height:0;opacity:0;overflow:hidden;visibility:hidden;transition:max-height var(--motion) var(--ease),opacity var(--motion),visibility var(--motion);flex-wrap:wrap}
-  #nav-toggle[aria-expanded="true"] + #workspace-nav {max-height:15rem;opacity:1;visibility:visible;margin-top:.3rem}
+  #workspace-nav a {min-width:0;max-width:100%;white-space:normal}
+  #nav-toggle[aria-expanded="true"] + #workspace-nav {max-height:min(15rem,55dvh);overflow-y:auto;opacity:1;visibility:visible;margin-top:.3rem}
   .template-grid {grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:650px) {
@@ -675,6 +679,9 @@ details[open] > :not(summary) {animation:unfold var(--fast) var(--ease) both}
   .template-card {padding:10px}
   #toast-stack {right:10px;bottom:10px;width:min(360px,calc(100% - 20px))}
   .toast-card:nth-last-child(n+3) .toast-copy p {display:none}
+}
+@media(max-width:950px) and (max-height:420px) {
+  .top {position:relative}
 }
 @media(max-width:420px) {
   .simulation-form,.dialog-body .simulation-form {grid-template-columns:1fr}
@@ -769,7 +776,7 @@ const companyKey = company=>companyLabel(company).toLowerCase();
 
 const history = [
   {id:'INC-096', date:'Oct 29', service:'Payments API', fingerprint:'PAY_CONN_RESET', title:'Timeouts after a configuration update', priority:'P2', responder:'Maya Chen', cause:'A checkout timeout was set too low.', fix:'Restored the previously validated timeout and verified checkout success.', runbook:'RB-013 · Validate payment recovery'},
-  {id:'INC-104', date:'Nov 06', service:'Identity Gateway', fingerprint:'JWKS_CACHE_MISS', title:'Login errors after key rotation', priority:'P2', responder:'Sam Rivera', cause:'The identity gateway cache held stale signing keys.', fix:'Refreshed the signing-key cache and confirmed successful sign-ins.', runbook:'RB-008 · Refresh identity cache'},
+  {id:'INC-104', date:'Nov 06', service:'Identity Gateway', version:'2.4.2', fingerprint:'JWKS_CACHE_MISS', title:'Login errors after key rotation', priority:'P2', responder:'Sam Rivera', cause:'The identity gateway cache held stale signing keys.', fix:'Refreshed the signing-key cache and confirmed successful sign-ins.', runbook:'RB-008 · Refresh identity cache'},
   {id:'INC-109', date:'Nov 09', service:'Payments API', fingerprint:'PAY_PROVIDER_429', title:'Provider rate limit during peak hours', priority:'P1', responder:'Priya Shah', cause:'The external provider throttled authorization requests.', fix:null, runbook:null},
   {id:'INC-087', date:'Oct 22', service:'Inventory Database', fingerprint:'POOL_EXHAUSTED', title:'Too many inventory connections', priority:'P2', responder:'Alex Morgan', cause:'A scheduled export filled the connection pool.', fix:'Rescheduled the export and verified the connection pool recovered.', runbook:'RB-017 · Check inventory connections'},
   {id:'INC-081', date:'Oct 16', service:'Image CDN', fingerprint:'CDN_CACHE_MISS', title:'Image requests taking longer', priority:'P3', responder:'Priya Shah', cause:'Cache warmup was incomplete.', fix:'Warmed the cache before shifting traffic.'},
@@ -922,7 +929,7 @@ const scenarios = [
     unknowns:['Whether the affected node can reach the issuer now.', 'Whether the current cache actually lacks the active key.', 'Whether any downstream portal or session checks failed.'],
     events:[
       {id:'CHG-81', time:'10:00', seen:'10:00', kind:'Change', title:'Signing keys rotated', detail:'Scheduled identity key rotation completed.'},
-      {id:'LOG-44', time:'10:08', seen:'10:08', kind:'Log', signature:'JWKS_CACHE_MISS', title:'JWKS_CACHE_MISS', detail:'A gateway node rejects requests signed with the newly active key.'},
+      {id:'LOG-44', time:'10:08', seen:'10:08', kind:'Log', signature:'JWKS_CACHE_MISS', affectedVersion:'2.4.2', title:'JWKS_CACHE_MISS', detail:'A gateway node rejects requests signed with the newly active key.'},
       {id:'ALT-25', time:'10:09', seen:'10:09', kind:'Alert', title:'Sign-in error rate reaches 9%', detail:'Failures cluster on one gateway node.'},
     ],
     cause:'A stale signing-key cache is likely on one gateway node.', causeSources:['LOG-44','INC-104'],
@@ -985,24 +992,38 @@ function extractErrorSignature(title,description) {
 
 function sampleAlertContext({title,description,service,occurredAt,company}) {
   const fingerprint = extractErrorSignature(title,description);
+  const scope = companyKey(company);
+  if (!scope || scope !== companyKey(sampleCompanyFor(service))) return {fingerprint,events:[]};
   const windowStart = occurredAt - 2 * 60 * 60_000;
-  const events = sampleTelemetry.filter(event=>event.service===service && (!companyKey(company) || companyKey(company)===companyKey(sampleCompanyFor(service))) && event.seenAt<=occurredAt &&
+  const events = sampleTelemetry.filter(event=>event.service===service && event.seenAt<=occurredAt &&
     event.timeAt>=windowStart && (event.kind!=='Log' || event.signature===fingerprint));
   return {fingerprint,events};
 }
 
 const runbookChecks = {
-  'RB-008':{verifiedAt:Date.parse('2026-11-06T17:00:00Z'),reviewer:'Sam Rivera',version:'2.4.1'},
+  'RB-008':{verifiedAt:Date.parse('2026-11-06T17:00:00Z'),reviewer:'Sam Rivera',version:'2.4.2'},
   'RB-013':{verifiedAt:Date.parse('2026-10-29T17:00:00Z'),reviewer:'Maya Chen',version:'2.7.4'},
   'RB-017':{verifiedAt:Date.parse('2026-10-22T17:00:00Z'),reviewer:'Alex Morgan',version:'4.2.0'},
 };
 
-function runbookFreshness(document, archive, currentVersion, now = Date.now()) {
-  const applied = archive.filter(record=>record.runbook===document.id).sort((a,b)=>b.resolvedAt-a.resolvedAt)[0];
-  const check = applied ? {verifiedAt:applied.resolvedAt,reviewer:applied.responder,version:applied.version} : runbookChecks[document.id];
+function reviewedAt(record) {
+  const timestamps = [record.resolvedAt, record.reviewedAt ?? record.resolvedAt, record.verifiedAt ?? record.resolvedAt];
+  return timestamps.every(Number.isFinite) ? Math.max(...timestamps) : Infinity;
+}
+
+function runbookFreshness(document, archive, currentVersion, now = Date.now(), company = sampleCompanyFor(document.service)) {
+  const scope = companyKey(company);
+  const sampleScope = companyKey(sampleCompanyFor(document.service));
+  const checks = scope ? archive.filter(record=>record.runbook===document.id && record.service===document.service && companyKey(record.company)===scope && reviewedAt(record)<=now)
+    .map(record=>({verifiedAt:reviewedAt(record),reviewer:record.responder,version:record.version})) : [];
+  const sampleCheck = runbookChecks[document.id];
+  if (scope && scope===sampleScope && sampleCheck?.verifiedAt<=now) checks.push(sampleCheck);
+  const check = checks.sort((a,b)=>Number(Boolean(currentVersion && b.version===currentVersion))-
+    Number(Boolean(currentVersion && a.version===currentVersion)) || b.verifiedAt-a.verifiedAt)[0];
   const reasons = [];
   if (!check) reasons.push('No successful use recorded.');
-  if (!check?.version) reasons.push('Verified service version unknown.');
+  if (check && !check.version) reasons.push('Verified service version unknown.');
+  if (currentVersion==='') reasons.push('Current service version unknown.');
   if (check?.version && currentVersion && check.version!==currentVersion) reasons.push(`Current version ${currentVersion} differs from verified version ${check.version}.`);
   if (check && now-check.verifiedAt>90*86_400_000) reasons.push('Last verified more than 90 days ago.');
   return {check,reasons};
@@ -1011,9 +1032,10 @@ function runbookFreshness(document, archive, currentVersion, now = Date.now()) {
 const upstreamServices = {'Checkout':'Payments API','Order confirmation':'Payments API','Customer Portal':'Identity Gateway','Stock Sync':'Inventory Database'};
 
 function groupDuplicate(incident,candidates) {
-  if (!incident.fingerprint) return undefined;
+  const scope = companyKey(incident.company);
+  if (!scope || !incident.fingerprint) return undefined;
   return candidates.find(candidate=>candidate.id!==incident.id && !candidate.groupedUnder &&
-    companyKey(candidate.company)===companyKey(incident.company) &&
+    companyKey(candidate.company)===scope &&
     candidate.fingerprint===incident.fingerprint &&
     Math.abs(candidate.occurredAt-incident.occurredAt)<=5*60_000 &&
     (candidate.service===incident.service || upstreamServices[candidate.service]===incident.service ||
@@ -1027,14 +1049,21 @@ function investigate(incident, cutoff = '23:59', archive = []) {
     : incident.events.filter(event=>event.seen<=cutoff).sort((a,b)=>a.seen.localeCompare(b.seen));
   const observed = sample ? incident.triggeredAt!==null && (cutoff==='23:59' || cutoff>=incident.occurredAt)
     : cutoff >= incident.alert;
-  const company = companyKey(incident.company);
-  const learned = cutoff==='23:59' ? archive.filter(record=>record.id!==incident.id && companyKey(record.company)===company &&
-    record.resolvedAt<=(incident.triggeredAt ?? Infinity)).sort((a,b)=>b.resolvedAt-a.resolvedAt) : [];
-  const sampleHistory = company ? history.filter(record=>companyKey(sampleCompanyFor(record.service))===company) : history;
+  const company = companyKey(incident.company ?? (sample ? '' : sampleCompanyFor(incident.service)));
+  const alertAt = sample ? incident.triggeredAt ?? incident.occurredAt : sampleMonitoringTime(incident.alert);
+  const snapshotAt = cutoff==='23:59' ? alertAt : typeof cutoff==='number' ? cutoff : sampleMonitoringTime(cutoff);
+  const archiveCutoff = Math.min(alertAt,snapshotAt);
+  const learned = company ? archive.filter(record=>record.id!==incident.id && companyKey(record.company)===company &&
+    reviewedAt(record)<=archiveCutoff).sort((a,b)=>reviewedAt(b)-reviewedAt(a)) : [];
+  const sampleHistory = company ? history.filter(record=>companyKey(sampleCompanyFor(record.service))===company &&
+    (runbookChecks[documents.find(document=>document.incident===record.id)?.id]?.verifiedAt ?? Date.parse(`${record.date} 2026 12:00 UTC`))<=archiveCutoff) : [];
   const comparable = observed ? [...learned,...sampleHistory].filter(record=>record.service===incident.service ||
     (incident.fingerprint && record.fingerprint===incident.fingerprint)) : [];
   const nearby = comparable.filter(record=>record.service===incident.service);
   const exact = nearby.filter(record=>incident.fingerprint && record.fingerprint===incident.fingerprint);
+  const applicable = exact.filter(record=>incident.serviceVersion && record.version===incident.serviceVersion);
+  const reusableFixes = applicable.filter(record=>record.fix);
+  const previous = applicable.find(record=>record.cause);
   const changes = evidence.filter(event => ['Change','Maintenance'].includes(event.kind));
   const logs = evidence.filter(event => ['Log','Metric'].includes(event.kind));
   const signals = evidence.filter(event => ['Alert','Ticket','Provider'].includes(event.kind));
@@ -1044,10 +1073,9 @@ function investigate(incident, cutoff = '23:59', archive = []) {
     evidence.some(event => event.id === id) || nearby.some(record => record.id === id));
   const availableIds = new Set([...evidence,...nearby].map(item=>item.id));
   const findings = incident.findings.filter(finding=>finding.ids.every(id=>availableIds.has(id)));
-  const known = exact.find(record=>record.fix &&
-    (!record.resolvedAt || !record.version || !incident.serviceVersion || record.version===incident.serviceVersion));
+  const known = reusableFixes[0];
   const verifiedDocument = known && documents.find(document=>document.incident===known.id || document.id===known.runbook);
-  const release = sample && observed && changes.find(change=>change.version && logs.some(log=>
+  const release = sample && observed && changes.find(change=>change.version && (!incident.serviceVersion || change.version===incident.serviceVersion) && logs.some(log=>
     log.signature===incident.fingerprint && log.affectedVersion===change.version && log.timeAt>=change.timeAt));
   const releaseLog = release && logs.find(log=>log.signature===incident.fingerprint &&
     log.affectedVersion===release.version && log.timeAt>=release.timeAt);
@@ -1071,9 +1099,9 @@ function investigate(incident, cutoff = '23:59', archive = []) {
       cause = `The recent release ${release.version} is the leading cause. ${release.detail} ${releaseLog.detail}`;
       causeSources = [release.id,releaseLog.id];
       next = guide?.steps[0]?.[1] || 'Compare the same operation on the previous and current versions.';
-    } else if (exact[0]?.cause) {
-      cause = `Likely repeat of ${exact[0].id}. Prior cause: ${exact[0].cause} Confirm it against the current alert.`;
-      causeSources = [...incident.causeSources,exact[0].id,...logs.map(log=>log.id)];
+    } else if (previous) {
+      cause = `Likely repeat of ${previous.id}. Prior cause: ${previous.cause} Confirm it against the current alert.`;
+      causeSources = [...incident.causeSources,previous.id,...logs.map(log=>log.id)];
       next = guide?.steps[0]?.[1] || 'Confirm that the conditions of the previous incident match this alert.';
     } else {
       cause = 'The available evidence does not establish a likely cause.';
@@ -1089,24 +1117,26 @@ function investigate(incident, cutoff = '23:59', archive = []) {
       sameService ? 'Same service' : `Different service · ${record.service}`,
       sameSignature ? 'Same error signature' : incident.fingerprint ? 'Different error signature' : 'Current error signature unknown',
       record.fix ? 'Fix documented' : 'Fix missing',
-      versionDiffers && `Version ${record.version} differs from ${incident.serviceVersion}`
+      versionDiffers && `Version ${record.version} differs from ${incident.serviceVersion}`,
+      sameService && sameSignature && !record.version && 'Prior version unknown',
+      sameService && sameSignature && !incident.serviceVersion && 'Current version unknown',
     ].filter(Boolean)};
   });
   const challenger = release || alternative
     ? {claim:alternative ? incident.alternative : 'A shared upstream fault could also explain errors across versions.',
       check:'Compare the same operation and upstream route on both versions. Similar failures on the older version would weaken the release hypothesis.',
       sources:[alternative?.id,release?.id,releaseLog?.id].filter(Boolean)}
-    : exact[0]?.cause
+    : previous
       ? {claim:'The same error code can appear even when the previous cause is absent.',
         check:guide?.stopWhen || 'Check whether the confirmed cause from the previous record is present in the current logs. Its absence weakens the match.',
-        sources:[exact[0].id,...logs.map(event=>event.id)].slice(0,3)}
+        sources:[previous.id,...logs.map(event=>event.id)].slice(0,3)}
       : {claim:'The alert may coincide with a change while the affected operation fails elsewhere.',
         check:guide?.steps.find(([title])=>title.startsWith('Distinguish'))?.[1] ||
           'Compare a failing and a successful operation. If both use the changed component, check their other differences before attributing the failure.',
         sources:[...changes,...logs].slice(0,3).map(event=>event.id)};
-  const certainty = !ready || (sample && !release && !exact[0]?.cause) || incident.variant==='Unknown issue'
+  const certainty = !ready || (sample && !release && !previous) || incident.variant==='Unknown issue'
     ? 'Unknown' : 'Likely';
-  return {evidence, observed, nearby, exact, changes, alternative, ready, activity, relatedAlerts,
+  return {evidence, observed, nearby, exact, applicable, reusableFixes, archiveCutoff, changes, alternative, ready, activity, relatedAlerts,
     known, guide, relatedDocuments, verifiedDocument, findings, cause, causeSources, next, comparisons, challenger, certainty,
     verify:known?.verification || (sample && guide ? guide.verify : incident.verify)};
 }
@@ -1579,7 +1609,7 @@ function createImpactView(escape) {
         <h2 id="impact-stage" tabindex="-1">${escape(incident.title)}</h2>
         <p>${escape(incident.description)}</p>
       </div>
-      <div class="impact-clock"><small>Elapsed</small><strong role="timer" data-impact-clock>${time(performance.now()-run.startedAt)}</strong></div>
+      <div class="impact-clock"><small>Elapsed</small><strong role="timer" aria-label="Elapsed investigation time" data-impact-clock>${time(performance.now()-run.startedAt)}</strong></div>
     </section>
     <div class="impact-columns">
       ${sourcePanel(run)}
@@ -1663,7 +1693,15 @@ function createImpactView(escape) {
   }
 
   function focusStage() {
-    root.querySelector('#impact-stage').focus();
+    const heading = root.querySelector('#impact-stage');
+    heading.focus({preventScroll:true});
+    const header = root.closest('.frame')?.querySelector('.top');
+    const headerBottom = header && getComputedStyle(header).position==='sticky'
+      ? Math.max(0, header.getBoundingClientRect().bottom) : 0;
+    const {top,bottom} = heading.getBoundingClientRect();
+    if (top<headerBottom+8 || bottom>window.innerHeight) {
+      window.scrollBy({top:top-headerBottom-8,behavior:'instant'});
+    }
   }
 
   root.addEventListener('change',event=>{
@@ -1733,7 +1771,10 @@ const persona = document.querySelector('#persona');
 const personaMenu = document.querySelector('#persona-menu');
 const personaName = document.querySelector('#persona-name');
 const night = document.querySelector('#night');
+const navToggle = document.querySelector('#nav-toggle');
+const workspaceNav = document.querySelector('#workspace-nav');
 const saveKey = 'incident-compass-workspace-v1';
+const analysisSchema = 2;
 const windowMs = 30_000;
 const entranceTimings = {
   startup:{duration:2000,motion:1100,lead:160},
@@ -1785,6 +1826,9 @@ function initial() {
 function read() {
   try {
     const state = {...initial(), ...JSON.parse(localStorage.getItem(saveKey))};
+    for (const [id, analysis] of Object.entries(state.analyses)) {
+      if (analysis?.status==='ready' && analysis.schema!==analysisSchema) state.analyses[id] = {status:'queued',revision:analysis.revision};
+    }
     state.notifications = state.notifications.map((entry,index)=>({
       key:`legacy-${entry.time}-${index}`,read:false,...entry
     }));
@@ -1813,6 +1857,7 @@ let cutoff = '23:59';
 let query = '';
 let connected = false;
 let checkingGemini = location.protocol.startsWith('http');
+let geminiStatusRequested = false;
 let analysisBusy = false;
 let analysisCooldown = 0;
 const toastQueue = [];
@@ -2084,11 +2129,10 @@ function tick() {
   if (now>=reportSyncAt) void syncReportEvents();
 }
 
-function aiIncidentPayload(incident,state = workspace) {
+function aiIncidentPayload(incident,state = workspace,snapshot = '23:59') {
   const {id,title,description,service,company,occurredAt,triggeredAt,level,serviceVersion} = incident;
-  const archive = reviewedArchive(state).filter(record=>record.service===service && companyKey(record.company)===companyKey(company))
-    .sort((a,b)=>Number(b.fingerprint===incident.fingerprint)-Number(a.fingerprint===incident.fingerprint) ||
-      b.resolvedAt-a.resolvedAt).slice(0,3);
+  const {nearby,applicable} = investigateCase(incident,snapshot,state);
+  const archive = [...new Set([...applicable,...nearby])].filter(record=>Number.isFinite(record.resolvedAt)).slice(0,3);
   const grouped = incident.sampleAlert ? incident.events
     .filter(event=>event.kind==='Alert' && event.id!==id+'-alert').slice(0,3)
     .map(event=>({...event,detail:event.detail.slice(0,400)})) : [];
@@ -2097,7 +2141,7 @@ function aiIncidentPayload(incident,state = workspace) {
 }
 
 async function runNextAnalysis() {
-  if (!connected || analysisBusy || Date.now()<analysisCooldown) return;
+  if (view()==='impact' || !connected || analysisBusy || Date.now()<analysisCooldown) return;
   const requested = byId(selected);
   const foreground = view()==='desk' && activeTab==='brief' && cutoff==='23:59' && requested && requested.triggeredAt!==null;
   const id = foreground && (!workspace.analyses[selected] || workspace.analyses[selected].status==='queued')
@@ -2105,6 +2149,7 @@ async function runNextAnalysis() {
   if (!id) return;
   analysisBusy = true;
   const analyze = async ()=>{
+    if (view()==='impact') return;
     const state = read();
     const incident = byId(id,state);
     const existing = state.analyses[id];
@@ -2117,7 +2162,7 @@ async function runNextAnalysis() {
       });
       if (response.status===429) analysisCooldown = Date.now()+60_000;
       if (!response.ok) throw Error();
-      analysis = {status:'ready',...await response.json()};
+      analysis = {...await response.json(),status:'ready',schema:analysisSchema};
     } catch {
       analysis = {status:'unavailable'};
     }
@@ -2143,6 +2188,7 @@ function actionOnTask(action, id) {
     if (!state.active.includes(id)) return;
     const task = state.tasks[id];
     if (action === 'page' && !task && incidentPriority(incident,state) === 'P1') {
+      startNextPreparedRun(incident,state,Date.now());
       pageOnCall(state,incident);
       return `Urgent page sent to ${incident.owner} in this demo.`;
     }
@@ -2158,7 +2204,9 @@ function actionOnTask(action, id) {
     const canClaim = action === 'claim' && task?.status === 'open';
     const canPickUp = action==='accept' && !task && incidentPriority(incident,state)!=='P1';
     if (canAccept || canClaim || canPickUp) {
-      state.tasks[id] = {status:'claimed',by:performer,acceptedAt:Date.now()};
+      const acceptedAt = Date.now();
+      startNextPreparedRun(incident,state,acceptedAt);
+      state.tasks[id] = {status:'claimed',by:performer,acceptedAt};
       notification(state,id,'Ownership confirmed',`${performer} accepted the task.`);
       if (canClaim) state.messages.push({id, type:'claim', by:performer, time:Date.now()});
       return `${performer} accepted ownership of ${id}.`;
@@ -2203,8 +2251,10 @@ function automaticAnalysis(incident) {
     ${content}</section>`;
 }
 
-function freshnessPanel(document, currentVersion, archive = cutoff==='23:59' ? reviewedArchive() : []) {
-  const {check,reasons} = runbookFreshness(document,archive,currentVersion);
+function freshnessPanel(document, incident, result) {
+  const company = incident ? incident.company ?? '' : sampleCompanyFor(document.service);
+  const version = incident?.service===document.service ? incident.serviceVersion ?? '' : undefined;
+  const {check,reasons} = runbookFreshness(document,incident ? reviewedArchive() : [],version,result?.archiveCutoff,company);
   return `<div class="runbook-check block">
     <span class="badge neutral">${reasons.length?'Review before use':'Verification recorded'}</span>
     <p class="small">${check ? `Last verified ${html(formatIncidentTime(check.verifiedAt))} by ${html(check.reviewer)} · Version ${html(check.version || 'unknown')}.` : 'No verification is recorded for this procedure.'}</p>
@@ -2283,14 +2333,15 @@ function brief(incident, result) {
       <div class="panel"><div class="kicker">Known fix</div><h3>${result.known ? html(result.known.fix) : 'No known fix for this alert'}</h3>
       <p class="quiet">${result.known ? `Documented by ${html(result.known.responder)} in ${html(result.known.id)}.` : 'The archive has no verified fix applicable to this alert and version.'}</p>
       ${historical ? ref(result.known?.id || historical.id) : ''}
-      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}${freshnessPanel(result.verifiedDocument,incident.serviceVersion)}</div>` : ''}</div>
+      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}${freshnessPanel(result.verifiedDocument,incident,result)}</div>` : ''}</div>
       <div class="panel"><div class="kicker">Key uncertainty</div><h3>${html(incident.unknowns[0])}</h3><button class="small" data-tab="family">Open incident family tree</button></div>
     </div>
-    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}${freshnessPanel(result.guide,incident.serviceVersion)}</div>` : ''}
+    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}${freshnessPanel(result.guide,incident,result)}</div>` : ''}
     <div class="duo block">
       <div class="panel"><div class="kicker">Recent changes</div><ul class="archive">${result.changes.map(change => `<li><strong>${html(change.title)}</strong><br><small>${change.time} ET</small> ${ref(change.id)}</li>`).join('') || '<li>No relevant change recorded in this snapshot.</li>'}</ul></div>
       ${incident.sampleAlert ? `<div class="panel"><div class="kicker">Related past incidents</div><ul class="archive">${result.nearby.map(record=>
-        `<li><strong>${html(record.title)}</strong> ${ref(record.id)}<br><small>${result.exact.includes(record) ? 'Matching error signature' : 'Same service · Different error signature'}</small></li>`
+        `<li><strong>${html(record.title)}</strong> ${ref(record.id)}<br><small>${result.applicable.includes(record) ? 'Same error signature and version' : result.exact.includes(record)
+          ? 'Same error signature · Version differs or is unknown' : 'Same service · Different error signature'}</small></li>`
       ).join('') || '<li>No past incident recorded for this service.</li>'}</ul></div>` :
       `<div class="panel"><div class="kicker">Impact and priority</div><h3>${incidentPriority(incident)} · ${incident.affectedPct}% of monitored operations affected</h3>
       <p>Confirmed: ${incident.confirmed.join(', ')}.<br>Possible downstream impact: ${incident.possible.join(', ')}.</p>
@@ -2321,11 +2372,13 @@ function caseDetails(incident,result) {
 function incidentRunbooks(incident,result) {
   if (!result.observed) return '<p>The alert had not fired at this point in the replay.</p>';
   const guide = result.guide;
-  return `<div class="lead"><h3>${result.verifiedDocument ? 'Procedure linked to the matching past fix' : 'No verified fix for this error signature'}</h3>
-    <p>${result.verifiedDocument ? 'Check the runbook preconditions against the current evidence before following it.' : 'The documentation below can help you investigate or compare this alert with a different case.'}</p></div>
+  return `<div class="lead"><h3>${result.verifiedDocument ? 'Procedure linked to the matching past fix' : result.known
+    ? 'Matching fix has no linked runbook' : 'No verified fix for this alert and version'}</h3>
+    <p>${result.verifiedDocument ? 'Check the runbook preconditions against the current evidence before following it.' : result.known
+      ? 'Review the documented fix in the incident archive.' : 'The documentation below can help you investigate or compare this alert with a different case.'}</p></div>
     ${guide ? `<section class="panel block"><div class="kicker">${html(guide.kind)}</div><h3>${html(guide.title)}</h3><p>${html(guide.useWhen)}</p>
     <ol class="archive">${guide.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
-    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}${freshnessPanel(guide,incident.serviceVersion)}</section>` : ''}
+    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}${freshnessPanel(guide,incident,result)}</section>` : ''}
     ${result.relatedDocuments.length ? `<section class="panel block"><h3>Related archive documentation</h3><p>Compare the preconditions and error signature before using a procedure from another incident.</p><div class="references">${result.relatedDocuments.map(documentLink).join('')}</div></section>` : ''}`;
 }
 
@@ -2558,7 +2611,8 @@ async function createSimulationBatch(values,batch,localOnly) {
     const inputs = values.map(item=>validateSimulation(item,serviceNames,now));
     if (Object.keys(state.custom).length+inputs.length > 100) throw Error('This workspace holds up to 100 custom simulations. Delete a test event or reset the simulator.');
     for (const input of inputs) {
-      const id = 'SIM-' + crypto.randomUUID().split('-').at(-1).toUpperCase();
+      // Challenge feed IDs also fall outside the Telegram router's sendable ID format.
+      const id = (localOnly ? 'SIM-LOCAL' : 'SIM-') + crypto.randomUUID().split('-').at(-1).toUpperCase();
       const record = createSimulation(input,actor,now,id);
       if (localOnly) record.localOnly = true;
       state.custom[id] = record;
@@ -2619,7 +2673,7 @@ function openResolution(id,level,note = '',priorityReason = '') {
   const incident = byId(id);
   if (!incident || incident.triggeredAt===null) return;
   const current = workspace.resolutions[id];
-  const matching = investigateCase(incident,'23:59').exact.filter(record=>record.fix);
+  const matching = investigateCase(incident,'23:59').reusableFixes;
   const runbooks = documents.filter(document=>document.service===incident.service);
   openDialog(id,'Resolve incident',`
     <p>${html(incident.title)}</p>
@@ -2683,6 +2737,26 @@ function incidentWork(incident,state) {
     level:incidentPriority(incident,state),...localAcceptance};
 }
 
+function reportRowFromResolution(incident,row,saved) {
+  if (Number.isFinite(saved?.resolvedAt) && saved.resolvedAt>=row.openedAt) {
+    return {...row,closedAt:saved.resolvedAt,closedBy:saved.responder,via:'website',verified:true,fix:saved.fix};
+  }
+  if (incident.status!=='resolved') return undefined;
+  const event=incident.activity.findLast(item=>item.status==='Resolved' && item.time>=row.openedAt);
+  if (event) return {...row,closedAt:event.time,closedBy:event.who,via:'website'};
+}
+
+function startNextPreparedRun(incident,state,now) {
+  const {id} = incident;
+  if (state.custom[id]) return;
+  const timing = incidentWork(incident,state);
+  const previous = state.workHistory[timing.key] ?? reportRowFromResolution(incident,timing,state.resolutions[id]);
+  if (!Number.isFinite(previous?.closedAt)) return;
+  state.workHistory[timing.key] ??= previous;
+  state.arrivals[id] = now;
+  delete state.tasks[id];
+}
+
 function localReportEvents(state = workspace) {
   const rows = new Map(Object.entries(state.workHistory));
   for (const id of [...new Set([...state.active,...Object.keys(state.resolutions),...Object.keys(state.custom)])]) {
@@ -2690,14 +2764,7 @@ function localReportEvents(state = workspace) {
     if (!incident || incident.triggeredAt===null || incident.groupedUnder) continue;
     const row=incidentWork(incident,state);
     if (rows.has(row.key)) continue;
-    const saved=!state.active.includes(id) && state.resolutions[id];
-    if (saved?.resolvedAt>=row.openedAt) {
-      Object.assign(row,{closedAt:saved.resolvedAt,closedBy:saved.responder,via:'website',verified:true,fix:saved.fix});
-    } else if (incident.status==='resolved') {
-      const event=incident.activity.findLast(item=>item.status==='Resolved' && item.time>row.openedAt);
-      if (event) Object.assign(row,{closedAt:event.time,closedBy:event.who,via:'website'});
-    }
-    rows.set(row.key,row);
+    rows.set(row.key,reportRowFromResolution(incident,row,state.resolutions[id]) ?? row);
   }
   return [...rows.values()];
 }
@@ -2728,7 +2795,9 @@ async function syncReportEvents() {
   try {
     const sent=[];
     for (const [key,job] of Object.entries(workspace.reportOutbox).slice(0,5)) {
-      await deliveryApi('telegram-complete',job,AbortSignal.timeout(8000));
+      if (!workspace.custom[job.incident]?.localOnly) {
+        await deliveryApi('telegram-complete',job,AbortSignal.timeout(8000));
+      }
       sent.push(key);
     }
     const result=await deliveryApi('telegram-report-events',undefined,AbortSignal.timeout(6000));
@@ -2753,8 +2822,11 @@ function saveResolution(state,id,fields,who,now) {
     throw Error('Choose a runbook for this service.');
   }
   const custom = state.custom[id];
+  const active = state.active.includes(id);
+  if (active) startNextPreparedRun(incident,state,now);
   const timing = incidentWork(incident,state);
-  const previous = state.workHistory[timing.key];
+  const stored = state.workHistory[timing.key];
+  const previous = stored ?? (active ? undefined : reportRowFromResolution(incident,timing,state.resolutions[id]));
   const closedAt = previous?.closedAt || now;
   const closedBy = previous?.closedBy || who;
   const level = custom && Object.hasOwn(simulationSeverities,fields.level) ? fields.level : incidentPriority(incident,state);
@@ -2762,7 +2834,9 @@ function saveResolution(state,id,fields,who,now) {
   state.resolutions[id] = {...reviewed,id,title:incident.title,service:incident.service,company:incident.company,
     fingerprint:incident.fingerprint,priority:level,responder:closedBy,resolvedAt:closedAt,reviewedAt:now};
   state.workHistory[timing.key] = {...timing,...previous,level,closedAt,closedBy,via:previous?.via || 'website',verified:true,fix:reviewed.fix};
-  if (!previous && location.protocol.startsWith('http')) state.reportOutbox[timing.key] = {incident:id,openedAt:timing.openedAt,completedAt:closedAt,who};
+  if (!stored && !custom?.localOnly && location.protocol.startsWith('http')) {
+    state.reportOutbox[timing.key] = {incident:id,openedAt:timing.openedAt,completedAt:closedAt,who};
+  }
   for (const record of Object.values(state.custom).filter(item=>item.id===id || item.groupedUnder===id)) {
     updateSimulation(record,{status:'resolved',level:record.id===id ? level : record.level,
       note:record.id===id ? reviewed.fix : `Resolved with ${id}.`},closedBy,now);
@@ -2912,7 +2986,9 @@ function reportData() {
   if (includeSampleReports) entries.push(...demoReportEvents);
   const companyOptions=[...new Map(entries.map(row=>[companyKey(row.company),companyLabel(row.company)||'Unassigned'])).entries()]
     .sort((a,b)=>a[1].localeCompare(b[1]));
-  const selectedCompany=reportCompany===null ? 'All companies' : companyOptions.find(([key])=>key===reportCompany)?.[1] || 'Unassigned';
+  const selection=companyOptions.find(([key])=>key===reportCompany);
+  if (!selection) reportCompany=null;
+  const selectedCompany=selection?.[1] || 'All companies';
   const summary=reportSummary(reportCompany===null ? entries : entries.filter(row=>companyKey(row.company)===reportCompany),period);
   const {opened,resolved,companies,repeated,buckets,mttr,timed}=summary;
   const sampleIncidents=new Set([...opened,...resolved].filter(row=>row.via==='sample').map(row=>row.key)).size;
@@ -3062,8 +3138,12 @@ function documentList() {
   `).join('') || '<li>No procedures match the filter.</li>';
 }
 function calendar() {
-  const recent = scenarios.flatMap(incident=>incident.events.filter(event=>['Change','Maintenance'].includes(event.kind)).map(event=>({...event,service:incident.service}))).sort((a,b)=>b.time.localeCompare(a.time));
   const monthCodes = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const [monitoringYear,monitoringMonth,monitoringDay] = sampleMonitoringDate.split('-').map(Number);
+  const recent = scenarios.flatMap(incident=>incident.events.filter(event=>['Change','Maintenance'].includes(event.kind)).map(event=>({
+    ...event,service:incident.service,date:`${monthCodes[monitoringMonth-1]} ${monitoringDay}`,
+    month:monitoringYear*12+monitoringMonth-1,day:monitoringDay,
+  })));
   const dayFormat = new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit'});
   const simulated = Object.values(workspace.custom).map(record=>{
     const timestamp = record.triggeredAt ?? record.scheduledAt;
@@ -3073,9 +3153,8 @@ function calendar() {
   });
   const records = [
     ...history.map(record=>({...record,kind:'Archived incident'})),
-    ...recent.map(record=>({...record,date:'Nov 21'})),
     ...upcoming,
-  ].map(record=>({...record,month:2026*12+monthCodes.indexOf(record.date.slice(0,3)),day:Number(record.date.slice(4))}));
+  ].map(record=>({...record,month:2026*12+monthCodes.indexOf(record.date.slice(0,3)),day:Number(record.date.slice(4))})).concat(recent);
   const year = Math.floor(calendarMonth/12);
   const month = calendarMonth%12;
   const monthTitle = value=>new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',month:'long',year:'numeric'}).format(new Date(Date.UTC(Math.floor(value/12),value%12,1)));
@@ -3128,7 +3207,7 @@ function alertCards(incidents = openIncidents()) {
       <h2>${html(incident.title)}</h2><p>${html(incident.service)} · ${custom ? html(incident.type) : incident.affectedPct+'% affected in sample'}</p>
       <div class="references alert-sources" aria-label="Source alerts">${alerts.map(event=>ref(event.id)).join('')}</div>
       <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button>
-      <button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button>
+      ${custom?.localOnly ? '' : `<button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button>`}
       ${custom ? '' : `<button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button>`}</div></div></li>`;
   }).join('') || '<li>No alerts match these filters.</li>';
 }
@@ -3297,19 +3376,25 @@ function openDialog(kicker,title,content) {
   else dialog.querySelector('[data-close]').focus({preventScroll:true});
 }
 function source(id) {
+  const incident = view()==='desk' ? byId(selected) : undefined;
+  const result = incident ? investigateCase(incident) : undefined;
   const document = documents.find(item=>item.id===id);
   if (document) {
+    const linked = document.incident && (!result || result.comparisons.some(({record})=>record.id===document.incident));
     openDialog(document.kind + ' / ' + id,document.title,`
       <p><small>${html(document.service)} · Owner: ${html(document.owner)} · Updated ${html(document.updated)} · Sample database</small></p>
       <p><strong>When to use it</strong><br>${html(document.useWhen)}</p>
       <ol class="archive">${document.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
       <p><strong>When to pause</strong><br>${html(document.stopWhen)}</p>
       <p><strong>How to verify recovery</strong><br>${html(document.verify)}</p>
-      ${document.incident ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}
-      ${freshnessPanel(document,byId(selected)?.service===document.service ? byId(selected).serviceVersion : undefined)}`);
+      ${linked ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}
+      ${freshnessPanel(document,incident,result)}`);
     return;
   }
-  const record = reviewedArchive().find(item=>item.id===id) || history.find(item=>item.id===id);
+  const archivedCase = incident?.id===id && cutoff==='23:59' && !workspace.active.includes(id)
+    ? workspace.resolutions[id] : undefined;
+  const record = result ? result.comparisons.find(({record})=>record.id===id)?.record || archivedCase
+    : reviewedArchive().find(item=>item.id===id) || history.find(item=>item.id===id);
   if (record) {
     const procedure = documents.find(item=>item.incident===record.id || item.id===record.runbook);
     openDialog('Incident archive / ' + id,record.title,`<p>${html(record.service)} · ${html(record.resolvedAt ? formatIncidentTime(record.resolvedAt) : record.date)} · ${record.priority} · ${html(record.responder)}</p>
@@ -3320,8 +3405,9 @@ function source(id) {
       ${procedure ? `<div class="block">${documentLink(procedure)}</div>` : '<p class="quiet">No runbook is linked to this archive record.</p>'}`);
     return;
   }
-  const event = byId(selected)?.events.find(item=>item.id===id) ||
-    [...scenarios,...Object.values(workspace.custom).map(asInvestigation)].flatMap(item=>item.events).find(item=>item.id===id);
+  const event = result ? result.evidence.find(item=>item.id===id)
+    : scenarios.flatMap(item=>item.events).find(item=>item.id===id) ||
+      Object.values(workspace.custom).flatMap(item=>asInvestigation(item).events).find(item=>item.id===id);
   if (event) openDialog(event.kind + ' / ' + id,event.title,`<p>${html(event.detail)}</p>
     <p class="mono">Occurred ${snapshotLabel(event.timeAt ?? event.time)} · Available ${snapshotLabel(event.seenAt ?? event.seen)}</p>`);
 }
@@ -3667,6 +3753,10 @@ async function reviewTelegramRoute(id) {
 }
 
 async function openTelegramNotice(incidentId='',recipient='') {
+  if (workspace.custom[incidentId]?.localOnly) {
+    notice('Challenge feed alerts stay in the workspace.','error');
+    return;
+  }
   openDialog('Telegram delivery','Send Telegram notification','<p data-delivery-status role="status">Loading paired recipients…</p>');
   const target=dialog.querySelector('[data-delivery-status]');
   try {
@@ -3675,7 +3765,7 @@ async function openTelegramNotice(incidentId='',recipient='') {
     const recipients=info.team||info.people.length;
     const incidentOptions = items=>items.map(incident=>`<option value="${incident.id}" ${incident.id===incidentId?'selected':''}>
       ${incidentPriority(incident)} · ${html(incident.title)}</option>`).join('');
-    const tests = Object.values(workspace.custom).filter(incident=>incident.triggeredAt!==null);
+    const tests = Object.values(workspace.custom).filter(incident=>incident.triggeredAt!==null && !incident.localOnly);
     openDialog('Telegram delivery','Send Telegram notification',`
       <p>Choose the team group for one post, or choose a private responder to request acknowledgement with a deadline. Custom incidents are labeled as test events.</p>
       <form class="delivery-form" data-telegram-notice-form>
@@ -3903,7 +3993,7 @@ function fallback(incident,result,question) {
     return [intro,`[${guide.id}] ${guide.title}`,...guide.steps.map(([name,step],index)=>`${index+1}. ${name}: ${step}`),`Pause if: ${guide.stopWhen}`,`Verify: ${guide.verify}`].join('\n\n');
   }
   if (/priorit|urgent|first|impact|cost|money/.test(q)) {
-    return `${incident.title} is ${priority(incident)}. The monitor shows ${incident.affectedPct}% of operations affected. Confirmed: ${incident.confirmed.join(', ')}. Check first: ${incident.next}`;
+    return `${incident.title} is ${incidentPriority(incident)}. The monitor shows ${incident.affectedPct}% of operations affected. Confirmed: ${incident.confirmed.join(', ')}. Check first: ${incident.next}`;
   }
   if (/before|past|similar|fix|compar/.test(q)) {
     const record = result.exact[0] || result.nearby[0];
@@ -3973,7 +4063,7 @@ async function ask(question, speak = false) {
     try {
       const earlierQuestions = conversation.map(turn=>turn.question);
       const response = await fetch('/api/ask', {method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({...aiIncidentPayload(incident),cutoff:snapshot,question,earlierQuestions})});
+        body:JSON.stringify({...aiIncidentPayload(incident,workspace,snapshot),cutoff:snapshot,question,earlierQuestions})});
       if (!response.ok) throw Error();
       const data = await response.json();
       reply = data.answer;
@@ -4069,11 +4159,13 @@ document.addEventListener('click',event=>{
     const incident = byId(data.trigger);
     choose(incident.id);
     void update(state=>{
+      const now=Date.now();
+      startNextPreparedRun(incident,state,now);
       if (!state.active.includes(incident.id)) {
         state.active.push(incident.id);
-        state.arrivals[incident.id]=Date.now();
+        state.arrivals[incident.id]=now;
         delete state.tasks[incident.id];
-      } else if (!state.tasks[incident.id]?.acceptedAt) state.arrivals[incident.id] ??= Date.now();
+      } else if (!state.tasks[incident.id]?.acceptedAt) state.arrivals[incident.id] ??= now;
       state.analyses[incident.id] ??= {status:'queued'};
       notification(state,incident.id,'Sample alert received',incident.title);
       if (incidentPriority(incident,state)==='P1' && !state.tasks[incident.id]) pageOnCall(state,incident);
@@ -4334,12 +4426,17 @@ document.addEventListener('submit',event=>{
     const id=form.elements.incident.value;
     const recipient=form.elements.recipient.value;
     const record=workspace.custom[id];
+    const incident=byId(id);
+    const target=form.querySelector('[data-delivery-status]');
+    if (!incident || record?.localOnly || record?.triggeredAt===null) {
+      target.textContent='Choose an incident available for Telegram delivery.';
+      return;
+    }
     const simulation=record ? simulationPayload(record) : undefined;
     const button=form.querySelector('[type=submit]');
-    const target=form.querySelector('[data-delivery-status]');
     button.disabled=true;
     target.textContent='Preparing the Telegram notification…';
-    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(byId(id)),recipient,simulation}).then(result=>{
+    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(incident),recipient,simulation}).then(result=>{
       if(target.isConnected&&dialog.open)showTelegramNotice(result,recipient);
     },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
     return;
@@ -4439,7 +4536,7 @@ document.addEventListener('change',event=>{
   if (event.target.matches('[data-resolution-template]')) {
     const form = event.target.form;
     const incident = byId(form.dataset.resolutionForm);
-    const previous = investigateCase(incident,'23:59').exact.find(record=>record.id===event.target.value);
+    const previous = investigateCase(incident,'23:59').reusableFixes.find(record=>record.id===event.target.value);
     if (previous) {
       form.elements.cause.value = previous.cause || '';
       form.elements.fix.value = previous.fix || '';
@@ -4544,22 +4641,9 @@ window.addEventListener('storage',event=>{
   discardRemovedToasts();
   queueToasts(workspace.notifications.filter(entry=>!before.has(entry.key)).reverse());
 });
-window.addEventListener('hashchange',()=>{
-  if (location.hash==='#main') return;
-  document.querySelector('#nav-toggle').setAttribute('aria-expanded','false');
-  if (view()!==renderedPage) window.scrollTo({top:0,behavior:'instant'});
-  query=''; render(); main.focus({preventScroll:true});
-});
-document.querySelector('#nav-toggle').addEventListener('click',event=>{
-  const control = event.currentTarget;
-  control.setAttribute('aria-expanded',String(control.getAttribute('aria-expanded')!=='true'));
-});
-document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault(); main.focus();});
-window.addEventListener('focus',refreshAutomaticIndicator);
-refreshAutomaticIndicator();
-tick();
-setInterval(tick,500);
-if (checkingGemini) {
+function checkGeminiStatus() {
+  if (!checkingGemini || geminiStatusRequested || view()==='impact') return;
+  geminiStatusRequested = true;
   fetch('/api/status',{signal:AbortSignal.timeout(5000)})
     .then(response=>response.json())
     .then(status=>{connected = status.gemini===true;})
@@ -4570,6 +4654,39 @@ if (checkingGemini) {
       void runNextAnalysis();
     });
 }
+
+function closeWorkspaceMenu(returnFocus = false) {
+  if (navToggle.getAttribute('aria-expanded')!=='true') return;
+  navToggle.setAttribute('aria-expanded','false');
+  if (returnFocus && navToggle.getClientRects().length) navToggle.focus();
+}
+
+window.addEventListener('hashchange',()=>{
+  if (location.hash==='#main') return;
+  closeWorkspaceMenu();
+  if (view()!==renderedPage) window.scrollTo({top:0,behavior:'instant'});
+  query=''; render(); main.focus({preventScroll:true});
+  checkGeminiStatus();
+});
+navToggle.addEventListener('click',()=>{
+  navToggle.setAttribute('aria-expanded',String(navToggle.getAttribute('aria-expanded')!=='true'));
+});
+workspaceNav.addEventListener('click',event=>{
+  const link = event.target.closest('a[data-view]');
+  if (link) closeWorkspaceMenu(link.hash===location.hash);
+});
+document.addEventListener('keydown',event=>{
+  if (event.key!=='Escape' || event.defaultPrevented || navToggle.getAttribute('aria-expanded')!=='true' ||
+      !navToggle.getClientRects().length || dialog.open || assistantWindow.open || personaMenu.matches(':popover-open')) return;
+  event.preventDefault();
+  closeWorkspaceMenu(true);
+});
+document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault(); main.focus();});
+window.addEventListener('focus',refreshAutomaticIndicator);
+refreshAutomaticIndicator();
+tick();
+setInterval(tick,500);
+checkGeminiStatus();
 render();
 </script>
 </head>
