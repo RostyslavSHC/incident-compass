@@ -11,6 +11,8 @@ const localOrigin = `http://127.0.0.1:${port}`;
 const files = {
   '/':['index.html','text/html; charset=utf-8'],
   '/style.css':['style.css','text/css; charset=utf-8'],
+  '/aurelis-icon.png':['aurelis-icon.png','image/png'],
+  '/aurelis-mark.png':['aurelis-mark.png','image/png'],
   '/app.mjs':['app.mjs','text/javascript; charset=utf-8'],
   '/data.mjs':['data.mjs','text/javascript; charset=utf-8'],
   '/simulations.mjs':['simulations.mjs','text/javascript; charset=utf-8'],
