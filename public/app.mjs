@@ -838,7 +838,8 @@ async function createSimulationBatch(values,batch,localOnly) {
     const inputs = values.map(item=>validateSimulation(item,serviceNames,now));
     if (Object.keys(state.custom).length+inputs.length > 100) throw Error('This workspace holds up to 100 custom simulations. Delete a test event or reset the simulator.');
     for (const input of inputs) {
-      const id = 'SIM-' + crypto.randomUUID().split('-').at(-1).toUpperCase();
+      // Challenge feed IDs also fall outside the Telegram router's sendable ID format.
+      const id = (localOnly ? 'SIM-LOCAL' : 'SIM-') + crypto.randomUUID().split('-').at(-1).toUpperCase();
       const record = createSimulation(input,actor,now,id);
       if (localOnly) record.localOnly = true;
       state.custom[id] = record;
@@ -1008,7 +1009,9 @@ async function syncReportEvents() {
   try {
     const sent=[];
     for (const [key,job] of Object.entries(workspace.reportOutbox).slice(0,5)) {
-      await deliveryApi('telegram-complete',job,AbortSignal.timeout(8000));
+      if (!workspace.custom[job.incident]?.localOnly) {
+        await deliveryApi('telegram-complete',job,AbortSignal.timeout(8000));
+      }
       sent.push(key);
     }
     const result=await deliveryApi('telegram-report-events',undefined,AbortSignal.timeout(6000));
@@ -1042,7 +1045,9 @@ function saveResolution(state,id,fields,who,now) {
   state.resolutions[id] = {...reviewed,id,title:incident.title,service:incident.service,company:incident.company,
     fingerprint:incident.fingerprint,priority:level,responder:closedBy,resolvedAt:closedAt,reviewedAt:now};
   state.workHistory[timing.key] = {...timing,...previous,level,closedAt,closedBy,via:previous?.via || 'website',verified:true,fix:reviewed.fix};
-  if (!previous && location.protocol.startsWith('http')) state.reportOutbox[timing.key] = {incident:id,openedAt:timing.openedAt,completedAt:closedAt,who};
+  if (!previous && !custom?.localOnly && location.protocol.startsWith('http')) {
+    state.reportOutbox[timing.key] = {incident:id,openedAt:timing.openedAt,completedAt:closedAt,who};
+  }
   for (const record of Object.values(state.custom).filter(item=>item.id===id || item.groupedUnder===id)) {
     updateSimulation(record,{status:'resolved',level:record.id===id ? level : record.level,
       note:record.id===id ? reviewed.fix : `Resolved with ${id}.`},closedBy,now);
@@ -1408,7 +1413,7 @@ function alertCards(incidents = openIncidents()) {
       <h2>${html(incident.title)}</h2><p>${html(incident.service)} · ${custom ? html(incident.type) : incident.affectedPct+'% affected in sample'}</p>
       <div class="references alert-sources" aria-label="Source alerts">${alerts.map(event=>ref(event.id)).join('')}</div>
       <div class="row"><small>${html(status)}</small><div class="buttons"><button class="small" data-open-case="${incident.id}">Open incident</button>
-      <button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button>
+      ${custom?.localOnly ? '' : `<button class="small" data-notify-telegram="${incident.id}">Notify in Telegram</button>`}
       ${custom ? '' : `<button class="small" data-route-incident="${incident.id}">Route in Telegram</button><button class="small" data-deliver="${incident.id}">Review delivery</button>`}</div></div></li>`;
   }).join('') || '<li>No alerts match these filters.</li>';
 }
@@ -1601,7 +1606,8 @@ function source(id) {
     return;
   }
   const event = byId(selected)?.events.find(item=>item.id===id) ||
-    [...scenarios,...Object.values(workspace.custom).map(asInvestigation)].flatMap(item=>item.events).find(item=>item.id===id);
+    scenarios.flatMap(incident=>incident.events).find(item=>item.id===id) ||
+    Object.values(workspace.custom).flatMap(record=>asInvestigation(record).events).find(item=>item.id===id);
   if (event) openDialog(event.kind + ' / ' + id,event.title,`<p>${html(event.detail)}</p>
     <p class="mono">Occurred ${snapshotLabel(event.timeAt ?? event.time)} · Available ${snapshotLabel(event.seenAt ?? event.seen)}</p>`);
 }
@@ -1947,6 +1953,10 @@ async function reviewTelegramRoute(id) {
 }
 
 async function openTelegramNotice(incidentId='',recipient='') {
+  if (workspace.custom[incidentId]?.localOnly) {
+    notice('Challenge feed alerts stay in the workspace.','error');
+    return;
+  }
   openDialog('Telegram delivery','Send Telegram notification','<p data-delivery-status role="status">Loading paired recipients…</p>');
   const target=dialog.querySelector('[data-delivery-status]');
   try {
@@ -1955,7 +1965,7 @@ async function openTelegramNotice(incidentId='',recipient='') {
     const recipients=info.team||info.people.length;
     const incidentOptions = items=>items.map(incident=>`<option value="${incident.id}" ${incident.id===incidentId?'selected':''}>
       ${incidentPriority(incident)} · ${html(incident.title)}</option>`).join('');
-    const tests = Object.values(workspace.custom).filter(incident=>incident.triggeredAt!==null);
+    const tests = Object.values(workspace.custom).filter(incident=>incident.triggeredAt!==null && !incident.localOnly);
     openDialog('Telegram delivery','Send Telegram notification',`
       <p>Choose the team group for one post, or choose a private responder to request acknowledgement with a deadline. Custom incidents are labeled as test events.</p>
       <form class="delivery-form" data-telegram-notice-form>
@@ -2183,7 +2193,7 @@ function fallback(incident,result,question) {
     return [intro,`[${guide.id}] ${guide.title}`,...guide.steps.map(([name,step],index)=>`${index+1}. ${name}: ${step}`),`Pause if: ${guide.stopWhen}`,`Verify: ${guide.verify}`].join('\n\n');
   }
   if (/priorit|urgent|first|impact|cost|money/.test(q)) {
-    return `${incident.title} is ${priority(incident)}. The monitor shows ${incident.affectedPct}% of operations affected. Confirmed: ${incident.confirmed.join(', ')}. Check first: ${incident.next}`;
+    return `${incident.title} is ${incidentPriority(incident)}. The monitor shows ${incident.affectedPct}% of operations affected. Confirmed: ${incident.confirmed.join(', ')}. Check first: ${incident.next}`;
   }
   if (/before|past|similar|fix|compar/.test(q)) {
     const record = result.exact[0] || result.nearby[0];
@@ -2614,12 +2624,17 @@ document.addEventListener('submit',event=>{
     const id=form.elements.incident.value;
     const recipient=form.elements.recipient.value;
     const record=workspace.custom[id];
+    const incident=byId(id);
+    const target=form.querySelector('[data-delivery-status]');
+    if (!incident || record?.localOnly || record?.triggeredAt===null) {
+      target.textContent='Choose an incident available for Telegram delivery.';
+      return;
+    }
     const simulation=record ? simulationPayload(record) : undefined;
     const button=form.querySelector('[type=submit]');
-    const target=form.querySelector('[data-delivery-status]');
     button.disabled=true;
     target.textContent='Preparing the Telegram notification…';
-    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(byId(id)),recipient,simulation}).then(result=>{
+    void deliveryApi('telegram-notice-preview',{incident:id,level:incidentPriority(incident),recipient,simulation}).then(result=>{
       if(target.isConnected&&dialog.open)showTelegramNotice(result,recipient);
     },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
     return;

@@ -124,6 +124,11 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
   assert.match(prepared.text,/Scheduled reports delayed/);
 
   const record = (incident,level)=>router.recordAlert({...input,incident,level,event:'simulation-'+incident});
+  await t.test('challenge feed alerts cannot be routed to Telegram',async()=>{
+    const incident = 'SIM-LOCALABC123456789';
+    assert.ok((await router.previewNotice({...input,incident,recipient:'team'})).error);
+    assert.ok((await record(incident,'P1')).error);
+  });
   await t.test('decline escalates to the group and a teammate can claim it',async()=>{
     const page = await record('SIM-A1111111','P2');
     assert.equal(page.route.stage,'queued-private');
