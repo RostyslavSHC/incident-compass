@@ -25,7 +25,7 @@ export const companyKey = company=>companyLabel(company).toLowerCase();
 
 export const history = [
   {id:'INC-096', date:'Oct 29', service:'Payments API', fingerprint:'PAY_CONN_RESET', title:'Timeouts after a configuration update', priority:'P2', responder:'Maya Chen', cause:'A checkout timeout was set too low.', fix:'Restored the previously validated timeout and verified checkout success.', runbook:'RB-013 · Validate payment recovery'},
-  {id:'INC-104', date:'Nov 06', service:'Identity Gateway', fingerprint:'JWKS_CACHE_MISS', title:'Login errors after key rotation', priority:'P2', responder:'Sam Rivera', cause:'The identity gateway cache held stale signing keys.', fix:'Refreshed the signing-key cache and confirmed successful sign-ins.', runbook:'RB-008 · Refresh identity cache'},
+  {id:'INC-104', date:'Nov 06', service:'Identity Gateway', version:'2.4.2', fingerprint:'JWKS_CACHE_MISS', title:'Login errors after key rotation', priority:'P2', responder:'Sam Rivera', cause:'The identity gateway cache held stale signing keys.', fix:'Refreshed the signing-key cache and confirmed successful sign-ins.', runbook:'RB-008 · Refresh identity cache'},
   {id:'INC-109', date:'Nov 09', service:'Payments API', fingerprint:'PAY_PROVIDER_429', title:'Provider rate limit during peak hours', priority:'P1', responder:'Priya Shah', cause:'The external provider throttled authorization requests.', fix:null, runbook:null},
   {id:'INC-087', date:'Oct 22', service:'Inventory Database', fingerprint:'POOL_EXHAUSTED', title:'Too many inventory connections', priority:'P2', responder:'Alex Morgan', cause:'A scheduled export filled the connection pool.', fix:'Rescheduled the export and verified the connection pool recovered.', runbook:'RB-017 · Check inventory connections'},
   {id:'INC-081', date:'Oct 16', service:'Image CDN', fingerprint:'CDN_CACHE_MISS', title:'Image requests taking longer', priority:'P3', responder:'Priya Shah', cause:'Cache warmup was incomplete.', fix:'Warmed the cache before shifting traffic.'},
@@ -178,7 +178,7 @@ export const scenarios = [
     unknowns:['Whether the affected node can reach the issuer now.', 'Whether the current cache actually lacks the active key.', 'Whether any downstream portal or session checks failed.'],
     events:[
       {id:'CHG-81', time:'10:00', seen:'10:00', kind:'Change', title:'Signing keys rotated', detail:'Scheduled identity key rotation completed.'},
-      {id:'LOG-44', time:'10:08', seen:'10:08', kind:'Log', signature:'JWKS_CACHE_MISS', title:'JWKS_CACHE_MISS', detail:'A gateway node rejects requests signed with the newly active key.'},
+      {id:'LOG-44', time:'10:08', seen:'10:08', kind:'Log', signature:'JWKS_CACHE_MISS', affectedVersion:'2.4.2', title:'JWKS_CACHE_MISS', detail:'A gateway node rejects requests signed with the newly active key.'},
       {id:'ALT-25', time:'10:09', seen:'10:09', kind:'Alert', title:'Sign-in error rate reaches 9%', detail:'Failures cluster on one gateway node.'},
     ],
     cause:'A stale signing-key cache is likely on one gateway node.', causeSources:['LOG-44','INC-104'],
@@ -241,24 +241,38 @@ export function extractErrorSignature(title,description) {
 
 export function sampleAlertContext({title,description,service,occurredAt,company}) {
   const fingerprint = extractErrorSignature(title,description);
+  const scope = companyKey(company);
+  if (!scope || scope !== companyKey(sampleCompanyFor(service))) return {fingerprint,events:[]};
   const windowStart = occurredAt - 2 * 60 * 60_000;
-  const events = sampleTelemetry.filter(event=>event.service===service && (!companyKey(company) || companyKey(company)===companyKey(sampleCompanyFor(service))) && event.seenAt<=occurredAt &&
+  const events = sampleTelemetry.filter(event=>event.service===service && event.seenAt<=occurredAt &&
     event.timeAt>=windowStart && (event.kind!=='Log' || event.signature===fingerprint));
   return {fingerprint,events};
 }
 
 const runbookChecks = {
-  'RB-008':{verifiedAt:Date.parse('2026-11-06T17:00:00Z'),reviewer:'Sam Rivera',version:'2.4.1'},
+  'RB-008':{verifiedAt:Date.parse('2026-11-06T17:00:00Z'),reviewer:'Sam Rivera',version:'2.4.2'},
   'RB-013':{verifiedAt:Date.parse('2026-10-29T17:00:00Z'),reviewer:'Maya Chen',version:'2.7.4'},
   'RB-017':{verifiedAt:Date.parse('2026-10-22T17:00:00Z'),reviewer:'Alex Morgan',version:'4.2.0'},
 };
 
-export function runbookFreshness(document, archive, currentVersion, now = Date.now()) {
-  const applied = archive.filter(record=>record.runbook===document.id).sort((a,b)=>b.resolvedAt-a.resolvedAt)[0];
-  const check = applied ? {verifiedAt:applied.resolvedAt,reviewer:applied.responder,version:applied.version} : runbookChecks[document.id];
+function reviewedAt(record) {
+  const timestamps = [record.resolvedAt, record.reviewedAt ?? record.resolvedAt, record.verifiedAt ?? record.resolvedAt];
+  return timestamps.every(Number.isFinite) ? Math.max(...timestamps) : Infinity;
+}
+
+export function runbookFreshness(document, archive, currentVersion, now = Date.now(), company = sampleCompanyFor(document.service)) {
+  const scope = companyKey(company);
+  const sampleScope = companyKey(sampleCompanyFor(document.service));
+  const checks = scope ? archive.filter(record=>record.runbook===document.id && record.service===document.service && companyKey(record.company)===scope && reviewedAt(record)<=now)
+    .map(record=>({verifiedAt:reviewedAt(record),reviewer:record.responder,version:record.version})) : [];
+  const sampleCheck = runbookChecks[document.id];
+  if (scope && scope===sampleScope && sampleCheck?.verifiedAt<=now) checks.push(sampleCheck);
+  const check = checks.sort((a,b)=>Number(Boolean(currentVersion && b.version===currentVersion))-
+    Number(Boolean(currentVersion && a.version===currentVersion)) || b.verifiedAt-a.verifiedAt)[0];
   const reasons = [];
   if (!check) reasons.push('No successful use recorded.');
-  if (!check?.version) reasons.push('Verified service version unknown.');
+  if (check && !check.version) reasons.push('Verified service version unknown.');
+  if (currentVersion==='') reasons.push('Current service version unknown.');
   if (check?.version && currentVersion && check.version!==currentVersion) reasons.push(`Current version ${currentVersion} differs from verified version ${check.version}.`);
   if (check && now-check.verifiedAt>90*86_400_000) reasons.push('Last verified more than 90 days ago.');
   return {check,reasons};
@@ -267,9 +281,10 @@ export function runbookFreshness(document, archive, currentVersion, now = Date.n
 const upstreamServices = {'Checkout':'Payments API','Order confirmation':'Payments API','Customer Portal':'Identity Gateway','Stock Sync':'Inventory Database'};
 
 export function groupDuplicate(incident,candidates) {
-  if (!incident.fingerprint) return undefined;
+  const scope = companyKey(incident.company);
+  if (!scope || !incident.fingerprint) return undefined;
   return candidates.find(candidate=>candidate.id!==incident.id && !candidate.groupedUnder &&
-    companyKey(candidate.company)===companyKey(incident.company) &&
+    companyKey(candidate.company)===scope &&
     candidate.fingerprint===incident.fingerprint &&
     Math.abs(candidate.occurredAt-incident.occurredAt)<=5*60_000 &&
     (candidate.service===incident.service || upstreamServices[candidate.service]===incident.service ||
@@ -283,14 +298,21 @@ export function investigate(incident, cutoff = '23:59', archive = []) {
     : incident.events.filter(event=>event.seen<=cutoff).sort((a,b)=>a.seen.localeCompare(b.seen));
   const observed = sample ? incident.triggeredAt!==null && (cutoff==='23:59' || cutoff>=incident.occurredAt)
     : cutoff >= incident.alert;
-  const company = companyKey(incident.company);
-  const learned = cutoff==='23:59' ? archive.filter(record=>record.id!==incident.id && companyKey(record.company)===company &&
-    record.resolvedAt<=(incident.triggeredAt ?? Infinity)).sort((a,b)=>b.resolvedAt-a.resolvedAt) : [];
-  const sampleHistory = company ? history.filter(record=>companyKey(sampleCompanyFor(record.service))===company) : history;
+  const company = companyKey(incident.company ?? (sample ? '' : sampleCompanyFor(incident.service)));
+  const alertAt = sample ? incident.triggeredAt ?? incident.occurredAt : sampleMonitoringTime(incident.alert);
+  const snapshotAt = cutoff==='23:59' ? alertAt : typeof cutoff==='number' ? cutoff : sampleMonitoringTime(cutoff);
+  const archiveCutoff = Math.min(alertAt,snapshotAt);
+  const learned = company ? archive.filter(record=>record.id!==incident.id && companyKey(record.company)===company &&
+    reviewedAt(record)<=archiveCutoff).sort((a,b)=>reviewedAt(b)-reviewedAt(a)) : [];
+  const sampleHistory = company ? history.filter(record=>companyKey(sampleCompanyFor(record.service))===company &&
+    (runbookChecks[documents.find(document=>document.incident===record.id)?.id]?.verifiedAt ?? Date.parse(`${record.date} 2026 12:00 UTC`))<=archiveCutoff) : [];
   const comparable = observed ? [...learned,...sampleHistory].filter(record=>record.service===incident.service ||
     (incident.fingerprint && record.fingerprint===incident.fingerprint)) : [];
   const nearby = comparable.filter(record=>record.service===incident.service);
   const exact = nearby.filter(record=>incident.fingerprint && record.fingerprint===incident.fingerprint);
+  const applicable = exact.filter(record=>incident.serviceVersion && record.version===incident.serviceVersion);
+  const reusableFixes = applicable.filter(record=>record.fix);
+  const previous = applicable.find(record=>record.cause);
   const changes = evidence.filter(event => ['Change','Maintenance'].includes(event.kind));
   const logs = evidence.filter(event => ['Log','Metric'].includes(event.kind));
   const signals = evidence.filter(event => ['Alert','Ticket','Provider'].includes(event.kind));
@@ -300,10 +322,9 @@ export function investigate(incident, cutoff = '23:59', archive = []) {
     evidence.some(event => event.id === id) || nearby.some(record => record.id === id));
   const availableIds = new Set([...evidence,...nearby].map(item=>item.id));
   const findings = incident.findings.filter(finding=>finding.ids.every(id=>availableIds.has(id)));
-  const known = exact.find(record=>record.fix &&
-    (!record.resolvedAt || !record.version || !incident.serviceVersion || record.version===incident.serviceVersion));
+  const known = reusableFixes[0];
   const verifiedDocument = known && documents.find(document=>document.incident===known.id || document.id===known.runbook);
-  const release = sample && observed && changes.find(change=>change.version && logs.some(log=>
+  const release = sample && observed && changes.find(change=>change.version && (!incident.serviceVersion || change.version===incident.serviceVersion) && logs.some(log=>
     log.signature===incident.fingerprint && log.affectedVersion===change.version && log.timeAt>=change.timeAt));
   const releaseLog = release && logs.find(log=>log.signature===incident.fingerprint &&
     log.affectedVersion===release.version && log.timeAt>=release.timeAt);
@@ -327,9 +348,9 @@ export function investigate(incident, cutoff = '23:59', archive = []) {
       cause = `The recent release ${release.version} is the leading cause. ${release.detail} ${releaseLog.detail}`;
       causeSources = [release.id,releaseLog.id];
       next = guide?.steps[0]?.[1] || 'Compare the same operation on the previous and current versions.';
-    } else if (exact[0]?.cause) {
-      cause = `Likely repeat of ${exact[0].id}. Prior cause: ${exact[0].cause} Confirm it against the current alert.`;
-      causeSources = [...incident.causeSources,exact[0].id,...logs.map(log=>log.id)];
+    } else if (previous) {
+      cause = `Likely repeat of ${previous.id}. Prior cause: ${previous.cause} Confirm it against the current alert.`;
+      causeSources = [...incident.causeSources,previous.id,...logs.map(log=>log.id)];
       next = guide?.steps[0]?.[1] || 'Confirm that the conditions of the previous incident match this alert.';
     } else {
       cause = 'The available evidence does not establish a likely cause.';
@@ -345,24 +366,26 @@ export function investigate(incident, cutoff = '23:59', archive = []) {
       sameService ? 'Same service' : `Different service · ${record.service}`,
       sameSignature ? 'Same error signature' : incident.fingerprint ? 'Different error signature' : 'Current error signature unknown',
       record.fix ? 'Fix documented' : 'Fix missing',
-      versionDiffers && `Version ${record.version} differs from ${incident.serviceVersion}`
+      versionDiffers && `Version ${record.version} differs from ${incident.serviceVersion}`,
+      sameService && sameSignature && !record.version && 'Prior version unknown',
+      sameService && sameSignature && !incident.serviceVersion && 'Current version unknown',
     ].filter(Boolean)};
   });
   const challenger = release || alternative
     ? {claim:alternative ? incident.alternative : 'A shared upstream fault could also explain errors across versions.',
       check:'Compare the same operation and upstream route on both versions. Similar failures on the older version would weaken the release hypothesis.',
       sources:[alternative?.id,release?.id,releaseLog?.id].filter(Boolean)}
-    : exact[0]?.cause
+    : previous
       ? {claim:'The same error code can appear even when the previous cause is absent.',
         check:guide?.stopWhen || 'Check whether the confirmed cause from the previous record is present in the current logs. Its absence weakens the match.',
-        sources:[exact[0].id,...logs.map(event=>event.id)].slice(0,3)}
+        sources:[previous.id,...logs.map(event=>event.id)].slice(0,3)}
       : {claim:'The alert may coincide with a change while the affected operation fails elsewhere.',
         check:guide?.steps.find(([title])=>title.startsWith('Distinguish'))?.[1] ||
           'Compare a failing and a successful operation. If both use the changed component, check their other differences before attributing the failure.',
         sources:[...changes,...logs].slice(0,3).map(event=>event.id)};
-  const certainty = !ready || (sample && !release && !exact[0]?.cause) || incident.variant==='Unknown issue'
+  const certainty = !ready || (sample && !release && !previous) || incident.variant==='Unknown issue'
     ? 'Unknown' : 'Likely';
-  return {evidence, observed, nearby, exact, changes, alternative, ready, activity, relatedAlerts,
+  return {evidence, observed, nearby, exact, applicable, reusableFixes, archiveCutoff, changes, alternative, ready, activity, relatedAlerts,
     known, guide, relatedDocuments, verifiedDocument, findings, cause, causeSources, next, comparisons, challenger, certainty,
     verify:known?.verification || (sample && guide ? guide.verify : incident.verify)};
 }

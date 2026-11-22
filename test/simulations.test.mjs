@@ -49,15 +49,16 @@ test('acknowledgement, status changes, and recovery preserve responder history',
   assert.equal(record.activity.at(-1).note,'Probe recovered');
 });
 
-test('test reports provide synthetic evidence without claiming a historical fix',()=>{
+test('test reports with no company keep their own evidence without loading another company’s history',()=>{
   const record = createSimulation(normalized({service:'Identity Gateway',company:''}),'Maya Chen',now,'SIM-EVIDENCE');
   releaseSimulation(record,now);
   const adapted = asInvestigation(record);
   const report = investigate(adapted);
   assert.ok(report.observed);
-  assert.ok(report.nearby.length);
+  assert.equal(report.nearby.length,0);
   assert.equal(report.exact.length,0);
   assert.equal(report.known,undefined);
+  assert.equal(report.evidence.length,1);
   assert.equal(report.evidence[0].detail,record.description);
   assert.ok(investigate(scenarios.find(incident=>incident.id==='INC-122')).verifiedDocument);
 });
@@ -91,6 +92,9 @@ test('a release is a likely cause only when the same service and version have co
   assert.match(beforeLog.cause,/does not establish/);
   const wrongError = investigate(incomingAlert({...template,description:'New error: PAY_UNKNOWN_FAILURE'}));
   assert.match(wrongError.cause,/does not establish/);
+  const wrongVersion = investigate(incomingAlert({...template,serviceVersion:'99.0.0'}));
+  assert.deepEqual(wrongVersion.changes.map(change=>change.id),['CHG-78']);
+  assert.match(wrongVersion.cause,/does not establish/);
   const otherService = investigate(incomingAlert({...template,service:'Checkout'}));
   assert.equal(otherService.changes.length,0);
   assert.match(otherService.cause,/does not establish/);
@@ -120,28 +124,55 @@ test('a reviewed fix is reusable for a later matching alert and checked against 
   const result = investigate(alert,'23:59',archive);
   assert.equal(result.known.id,'SIM-VERIFIED');
   assert.equal(result.verify,reviewed.verification);
-  assert.equal(investigate({...alert,serviceVersion:'4.3.0'},'23:59',archive).known,undefined);
-  assert.ok(investigate({...alert,serviceVersion:'4.3.0'},'23:59',archive).comparisons[0].reasons.some(reason=>reason.includes('differs')));
+  const otherVersion = investigate({...alert,serviceVersion:'4.3.0'},'23:59',archive);
+  assert.equal(otherVersion.known,undefined);
+  assert.equal(otherVersion.certainty,'Unknown');
+  assert.equal(otherVersion.reusableFixes.length,0);
+  assert.ok(otherVersion.comparisons[0].reasons.some(reason=>reason.includes('differs')));
+  const legacy = investigate(alert,'23:59',[{...archive[0],version:''}]);
+  assert.equal(legacy.known,undefined);
+  assert.ok(legacy.nearby.some(record=>record.id==='SIM-VERIFIED'));
   assert.equal(investigate(alert,alert.occurredAt,archive).known,undefined);
   assert.equal(investigate({...alert,company:'Another sample company'},'23:59',archive).known,undefined);
   assert.throws(()=>validateReviewedResolution({cause:reviewed.cause,fix:reviewed.fix}),/recovery verification/);
 });
 
+test('replay keeps prior reviews and filters closure and verification independently',()=>{
+  const alert = {...incomingAlert({...investigationTemplates[2],serviceVersion:'4.2.0'}),triggeredAt:sampleMonitoringTime('10:14')};
+  const earlier = {id:'SIM-EARLIER',title:'Earlier write stall',service:alert.service,company:alert.company,fingerprint:alert.fingerprint,
+    version:'4.2.0',cause:'The import blocked the primary.',fix:'Moved the import.',resolvedAt:sampleMonitoringTime('10:10')};
+  const laterReview = {...earlier,id:'SIM-LATERREVIEW',reviewedAt:sampleMonitoringTime('10:13')};
+  const laterVerification = {...earlier,id:'SIM-LATERVERIFY',reviewedAt:sampleMonitoringTime('10:11'),verifiedAt:sampleMonitoringTime('10:15')};
+  const laterClosure = {...earlier,id:'SIM-LATERCLOSE',resolvedAt:sampleMonitoringTime('10:15'),reviewedAt:sampleMonitoringTime('10:11')};
+  const archive = [earlier,laterReview,laterVerification,laterClosure];
+  assert.deepEqual(investigate(alert,alert.occurredAt,archive).reusableFixes.map(record=>record.id),['SIM-EARLIER']);
+  assert.deepEqual(investigate(alert,'23:59',archive).reusableFixes.map(record=>record.id),['SIM-LATERREVIEW','SIM-EARLIER']);
+  assert.deepEqual(investigate(alert,sampleMonitoringTime('10:15'),archive).reusableFixes.map(record=>record.id),['SIM-LATERREVIEW','SIM-EARLIER']);
+});
+
 test('duplicate matching requires the same error, a shared service path and a nearby timestamp',()=>{
-  const original = {id:'SIM-ROOT',service:'Payments API',fingerprint:'PAY_AUTH_TIMEOUT',occurredAt:now};
-  const downstream = {id:'SIM-SECOND',service:'Checkout',fingerprint:original.fingerprint,occurredAt:now+60_000};
+  const original = {id:'SIM-ROOT',company:'Cedar Market',service:'Payments API',fingerprint:'PAY_AUTH_TIMEOUT',occurredAt:now};
+  const downstream = {id:'SIM-SECOND',company:original.company,service:'Checkout',fingerprint:original.fingerprint,occurredAt:now+60_000};
   assert.equal(groupDuplicate(downstream,[original]),original);
   assert.equal(groupDuplicate({...downstream,service:'Reporting'},[original]),undefined);
   assert.equal(groupDuplicate({...downstream,company:'Another sample company'},[original]),undefined);
   assert.equal(groupDuplicate({...downstream,fingerprint:null},[original]),undefined);
   assert.equal(groupDuplicate({...downstream,occurredAt:now+360_000},[original]),undefined);
+  assert.equal(groupDuplicate({...downstream,company:''},[{...original,company:''}]),undefined);
 });
 
-test('runbook freshness reports a version difference and adopts newly reviewed use',()=>{
+test('runbook freshness uses a reviewed version from the selected company and time',()=>{
   const guide = documents.find(document=>document.id==='RB-008');
-  const before = runbookFreshness(guide,[],'2.4.2',now);
+  const before = runbookFreshness(guide,[],'2.4.3',now);
   assert.ok(before.reasons.some(reason=>reason.includes('differs')));
-  const after = runbookFreshness(guide,[{runbook:guide.id,resolvedAt:now-10_000,responder:'Priya Shah',version:'2.4.2'}],'2.4.2',now);
+  const review = {runbook:guide.id,service:guide.service,company:'Northstar Labs',resolvedAt:now-10_000,
+    reviewedAt:now-1_000,responder:'Priya Shah',version:'2.4.3'};
+  const unrelated = {...review,company:'Different Workspace',reviewedAt:now-500,responder:'Unrelated reviewer'};
+  const future = {...review,reviewedAt:now+1,responder:'Future reviewer'};
+  const after = runbookFreshness(guide,[review,unrelated,future],'2.4.3',now);
   assert.equal(after.check.reviewer,'Priya Shah');
+  assert.equal(after.check.verifiedAt,review.reviewedAt);
   assert.deepEqual(after.reasons,[]);
+  assert.equal(runbookFreshness(guide,[review],'2.4.3',now,'Another Workspace').check,undefined);
+  assert.equal(runbookFreshness(guide,[review],'2.4.3',now,'').check,undefined);
 });

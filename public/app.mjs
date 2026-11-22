@@ -16,6 +16,7 @@ const night = document.querySelector('#night');
 const navToggle = document.querySelector('#nav-toggle');
 const workspaceNav = document.querySelector('#workspace-nav');
 const saveKey = 'incident-compass-workspace-v1';
+const analysisSchema = 2;
 const windowMs = 30_000;
 const entranceTimings = {
   startup:{duration:2000,motion:1100,lead:160},
@@ -67,6 +68,9 @@ function initial() {
 function read() {
   try {
     const state = {...initial(), ...JSON.parse(localStorage.getItem(saveKey))};
+    for (const [id, analysis] of Object.entries(state.analyses)) {
+      if (analysis?.status==='ready' && analysis.schema!==analysisSchema) state.analyses[id] = {status:'queued',revision:analysis.revision};
+    }
     state.notifications = state.notifications.map((entry,index)=>({
       key:`legacy-${entry.time}-${index}`,read:false,...entry
     }));
@@ -367,11 +371,10 @@ function tick() {
   if (now>=reportSyncAt) void syncReportEvents();
 }
 
-function aiIncidentPayload(incident,state = workspace) {
+function aiIncidentPayload(incident,state = workspace,snapshot = '23:59') {
   const {id,title,description,service,company,occurredAt,triggeredAt,level,serviceVersion} = incident;
-  const archive = reviewedArchive(state).filter(record=>record.service===service && companyKey(record.company)===companyKey(company))
-    .sort((a,b)=>Number(b.fingerprint===incident.fingerprint)-Number(a.fingerprint===incident.fingerprint) ||
-      b.resolvedAt-a.resolvedAt).slice(0,3);
+  const {nearby,applicable} = investigateCase(incident,snapshot,state);
+  const archive = [...new Set([...applicable,...nearby])].filter(record=>Number.isFinite(record.resolvedAt)).slice(0,3);
   const grouped = incident.sampleAlert ? incident.events
     .filter(event=>event.kind==='Alert' && event.id!==id+'-alert').slice(0,3)
     .map(event=>({...event,detail:event.detail.slice(0,400)})) : [];
@@ -401,7 +404,7 @@ async function runNextAnalysis() {
       });
       if (response.status===429) analysisCooldown = Date.now()+60_000;
       if (!response.ok) throw Error();
-      analysis = {status:'ready',...await response.json()};
+      analysis = {...await response.json(),status:'ready',schema:analysisSchema};
     } catch {
       analysis = {status:'unavailable'};
     }
@@ -487,8 +490,10 @@ function automaticAnalysis(incident) {
     ${content}</section>`;
 }
 
-function freshnessPanel(document, currentVersion, archive = cutoff==='23:59' ? reviewedArchive() : []) {
-  const {check,reasons} = runbookFreshness(document,archive,currentVersion);
+function freshnessPanel(document, incident, result) {
+  const company = incident ? incident.company ?? '' : sampleCompanyFor(document.service);
+  const version = incident?.service===document.service ? incident.serviceVersion ?? '' : undefined;
+  const {check,reasons} = runbookFreshness(document,incident ? reviewedArchive() : [],version,result?.archiveCutoff,company);
   return `<div class="runbook-check block">
     <span class="badge neutral">${reasons.length?'Review before use':'Verification recorded'}</span>
     <p class="small">${check ? `Last verified ${html(formatIncidentTime(check.verifiedAt))} by ${html(check.reviewer)} · Version ${html(check.version || 'unknown')}.` : 'No verification is recorded for this procedure.'}</p>
@@ -567,14 +572,15 @@ function brief(incident, result) {
       <div class="panel"><div class="kicker">Known fix</div><h3>${result.known ? html(result.known.fix) : 'No known fix for this alert'}</h3>
       <p class="quiet">${result.known ? `Documented by ${html(result.known.responder)} in ${html(result.known.id)}.` : 'The archive has no verified fix applicable to this alert and version.'}</p>
       ${historical ? ref(result.known?.id || historical.id) : ''}
-      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}${freshnessPanel(result.verifiedDocument,incident.serviceVersion)}</div>` : ''}</div>
+      ${result.verifiedDocument ? `<div class="block">${documentLink(result.verifiedDocument)}${freshnessPanel(result.verifiedDocument,incident,result)}</div>` : ''}</div>
       <div class="panel"><div class="kicker">Key uncertainty</div><h3>${html(incident.unknowns[0])}</h3><button class="small" data-tab="family">Open incident family tree</button></div>
     </div>
-    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}${freshnessPanel(result.guide,incident.serviceVersion)}</div>` : ''}
+    ${result.guide && !result.verifiedDocument ? `<div class="panel block"><div class="kicker">${html(result.guide.kind)}</div><p>${html(result.guide.useWhen)}</p>${documentLink(result.guide)}${freshnessPanel(result.guide,incident,result)}</div>` : ''}
     <div class="duo block">
       <div class="panel"><div class="kicker">Recent changes</div><ul class="archive">${result.changes.map(change => `<li><strong>${html(change.title)}</strong><br><small>${change.time} ET</small> ${ref(change.id)}</li>`).join('') || '<li>No relevant change recorded in this snapshot.</li>'}</ul></div>
       ${incident.sampleAlert ? `<div class="panel"><div class="kicker">Related past incidents</div><ul class="archive">${result.nearby.map(record=>
-        `<li><strong>${html(record.title)}</strong> ${ref(record.id)}<br><small>${result.exact.includes(record) ? 'Matching error signature' : 'Same service · Different error signature'}</small></li>`
+        `<li><strong>${html(record.title)}</strong> ${ref(record.id)}<br><small>${result.applicable.includes(record) ? 'Same error signature and version' : result.exact.includes(record)
+          ? 'Same error signature · Version differs or is unknown' : 'Same service · Different error signature'}</small></li>`
       ).join('') || '<li>No past incident recorded for this service.</li>'}</ul></div>` :
       `<div class="panel"><div class="kicker">Impact and priority</div><h3>${incidentPriority(incident)} · ${incident.affectedPct}% of monitored operations affected</h3>
       <p>Confirmed: ${incident.confirmed.join(', ')}.<br>Possible downstream impact: ${incident.possible.join(', ')}.</p>
@@ -605,11 +611,13 @@ function caseDetails(incident,result) {
 function incidentRunbooks(incident,result) {
   if (!result.observed) return '<p>The alert had not fired at this point in the replay.</p>';
   const guide = result.guide;
-  return `<div class="lead"><h3>${result.verifiedDocument ? 'Procedure linked to the matching past fix' : 'No verified fix for this error signature'}</h3>
-    <p>${result.verifiedDocument ? 'Check the runbook preconditions against the current evidence before following it.' : 'The documentation below can help you investigate or compare this alert with a different case.'}</p></div>
+  return `<div class="lead"><h3>${result.verifiedDocument ? 'Procedure linked to the matching past fix' : result.known
+    ? 'Matching fix has no linked runbook' : 'No verified fix for this alert and version'}</h3>
+    <p>${result.verifiedDocument ? 'Check the runbook preconditions against the current evidence before following it.' : result.known
+      ? 'Review the documented fix in the incident archive.' : 'The documentation below can help you investigate or compare this alert with a different case.'}</p></div>
     ${guide ? `<section class="panel block"><div class="kicker">${html(guide.kind)}</div><h3>${html(guide.title)}</h3><p>${html(guide.useWhen)}</p>
     <ol class="archive">${guide.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
-    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}${freshnessPanel(guide,incident.serviceVersion)}</section>` : ''}
+    <p><strong>Pause if:</strong> ${html(guide.stopWhen)}</p><p><strong>Verify:</strong> ${html(guide.verify)}</p>${documentLink(guide)}${freshnessPanel(guide,incident,result)}</section>` : ''}
     ${result.relatedDocuments.length ? `<section class="panel block"><h3>Related archive documentation</h3><p>Compare the preconditions and error signature before using a procedure from another incident.</p><div class="references">${result.relatedDocuments.map(documentLink).join('')}</div></section>` : ''}`;
 }
 
@@ -904,7 +912,7 @@ function openResolution(id,level,note = '',priorityReason = '') {
   const incident = byId(id);
   if (!incident || incident.triggeredAt===null) return;
   const current = workspace.resolutions[id];
-  const matching = investigateCase(incident,'23:59').exact.filter(record=>record.fix);
+  const matching = investigateCase(incident,'23:59').reusableFixes;
   const runbooks = documents.filter(document=>document.service===incident.service);
   openDialog(id,'Resolve incident',`
     <p>${html(incident.title)}</p>
@@ -1586,19 +1594,25 @@ function openDialog(kicker,title,content) {
   else dialog.querySelector('[data-close]').focus({preventScroll:true});
 }
 function source(id) {
+  const incident = view()==='desk' ? byId(selected) : undefined;
+  const result = incident ? investigateCase(incident) : undefined;
   const document = documents.find(item=>item.id===id);
   if (document) {
+    const linked = document.incident && (!result || result.comparisons.some(({record})=>record.id===document.incident));
     openDialog(document.kind + ' / ' + id,document.title,`
       <p><small>${html(document.service)} · Owner: ${html(document.owner)} · Updated ${html(document.updated)} · Sample database</small></p>
       <p><strong>When to use it</strong><br>${html(document.useWhen)}</p>
       <ol class="archive">${document.steps.map(([title,step])=>`<li><strong>${html(title)}</strong><p>${html(step)}</p></li>`).join('')}</ol>
       <p><strong>When to pause</strong><br>${html(document.stopWhen)}</p>
       <p><strong>How to verify recovery</strong><br>${html(document.verify)}</p>
-      ${document.incident ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}
-      ${freshnessPanel(document,byId(selected)?.service===document.service ? byId(selected).serviceVersion : undefined)}`);
+      ${linked ? `<p>Linked incident ${ref(document.incident)}</p>` : ''}
+      ${freshnessPanel(document,incident,result)}`);
     return;
   }
-  const record = reviewedArchive().find(item=>item.id===id) || history.find(item=>item.id===id);
+  const archivedCase = incident?.id===id && cutoff==='23:59' && !workspace.active.includes(id)
+    ? workspace.resolutions[id] : undefined;
+  const record = result ? result.comparisons.find(({record})=>record.id===id)?.record || archivedCase
+    : reviewedArchive().find(item=>item.id===id) || history.find(item=>item.id===id);
   if (record) {
     const procedure = documents.find(item=>item.incident===record.id || item.id===record.runbook);
     openDialog('Incident archive / ' + id,record.title,`<p>${html(record.service)} · ${html(record.resolvedAt ? formatIncidentTime(record.resolvedAt) : record.date)} · ${record.priority} · ${html(record.responder)}</p>
@@ -1609,9 +1623,9 @@ function source(id) {
       ${procedure ? `<div class="block">${documentLink(procedure)}</div>` : '<p class="quiet">No runbook is linked to this archive record.</p>'}`);
     return;
   }
-  const event = byId(selected)?.events.find(item=>item.id===id) ||
-    scenarios.flatMap(incident=>incident.events).find(item=>item.id===id) ||
-    Object.values(workspace.custom).flatMap(record=>asInvestigation(record).events).find(item=>item.id===id);
+  const event = result ? result.evidence.find(item=>item.id===id)
+    : scenarios.flatMap(item=>item.events).find(item=>item.id===id) ||
+      Object.values(workspace.custom).flatMap(item=>asInvestigation(item).events).find(item=>item.id===id);
   if (event) openDialog(event.kind + ' / ' + id,event.title,`<p>${html(event.detail)}</p>
     <p class="mono">Occurred ${snapshotLabel(event.timeAt ?? event.time)} · Available ${snapshotLabel(event.seenAt ?? event.seen)}</p>`);
 }
@@ -2267,7 +2281,7 @@ async function ask(question, speak = false) {
     try {
       const earlierQuestions = conversation.map(turn=>turn.question);
       const response = await fetch('/api/ask', {method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({...aiIncidentPayload(incident),cutoff:snapshot,question,earlierQuestions})});
+        body:JSON.stringify({...aiIncidentPayload(incident,workspace,snapshot),cutoff:snapshot,question,earlierQuestions})});
       if (!response.ok) throw Error();
       const data = await response.json();
       reply = data.answer;
@@ -2738,7 +2752,7 @@ document.addEventListener('change',event=>{
   if (event.target.matches('[data-resolution-template]')) {
     const form = event.target.form;
     const incident = byId(form.dataset.resolutionForm);
-    const previous = investigateCase(incident,'23:59').exact.find(record=>record.id===event.target.value);
+    const previous = investigateCase(incident,'23:59').reusableFixes.find(record=>record.id===event.target.value);
     if (previous) {
       form.elements.cause.value = previous.cause || '';
       form.elements.fix.value = previous.fix || '';
