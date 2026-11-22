@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {exposureAssumptions,exposureAt,mergeIncidentWork,reportPeriod,reportSummary} from '../public/reports.mjs';
+import {acceptedIncidentWork,exposureAssumptions,exposureAt,mergeIncidentWork,reportPeriod,reportSummary} from '../public/reports.mjs';
 
 const now = Date.parse('2026-11-22T02:00:00Z');
 const openedAt = Date.parse('2026-11-21T23:00:00Z');
@@ -48,6 +48,21 @@ test('exposure assumptions are adjustable and exposure scales with the duration 
   assert.deepEqual(exposureAt(assumptions,30),{low:1500,high:3000});
   assert.deepEqual(exposureAt(assumptions,60),{low:3000,high:6000});
   assert.ok(exposureAssumptions({},'Operations').order>0);
+});
+
+test('accepted requests combine website and Telegram and stay visible until the report is saved',()=>{
+  const local={...website,closedAt:null,closedBy:null,verified:false};
+  const telegram={id:'route',incident:local.incident,created:openedAt+1000,stage:'accepted',acceptedAt,
+    acceptedBy:local.acceptedBy};
+  const waiting={id:'waiting',incident:'INC-122',created:openedAt+2000,stage:'waiting'};
+  const legacy={id:'legacy',incident:'INC-123',created:openedAt,stage:'accepted',acceptedBy:'Sam Rivera'};
+  const queue=acceptedIncidentWork([local],[telegram,waiting,legacy]);
+  assert.deepEqual(queue.map(row=>[row.incident,row.acceptedBy]),[['INC-121','Maya Chen'],['INC-123','Sam Rivera']]);
+  const fixed={...telegram,stage:'completed',completedAt:closedAt,completedBy:local.acceptedBy,completedVia:'telegram'};
+  assert.equal(acceptedIncidentWork([local],[fixed])[0].closedAt,closedAt);
+  assert.deepEqual(acceptedIncidentWork([website],[fixed]),[]);
+  const reopened={...local,openedAt:closedAt+1000,acceptedAt:null,acceptedBy:null};
+  assert.deepEqual(acceptedIncidentWork([website,reopened],[fixed]),[]);
 });
 
 test('companies combine normalized names and repeats stay within their company and service',()=>{

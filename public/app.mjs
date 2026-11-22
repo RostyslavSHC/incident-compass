@@ -3,7 +3,7 @@ import {
   asInvestigation, createSimulation, formatIncidentTime, investigationTemplates, releaseSimulation, simulationCategories,
   simulationSeverities, simulationStatuses, simulationTemplates, updateSimulation, validateReviewedResolution, validateSimulation,
 } from './simulations.mjs';
-import {demoReportEvents, durationLabel, exposureAssumptions, exposureAt, mergeIncidentWork, reportPeriod, reportSummary} from './reports.mjs';
+import {acceptedIncidentWork, demoReportEvents, durationLabel, exposureAssumptions, exposureAt, mergeIncidentWork, reportPeriod, reportSummary} from './reports.mjs';
 import {createImpactView} from './impact.mjs';
 import {setupPitchVoice} from './pitch-voice.mjs';
 
@@ -85,6 +85,8 @@ let actorChoice = sessionStorage.getItem('ic-actor') || teammates[0];
 let actor = teammates.includes(actorChoice) ? actorChoice : teammates[0];
 let personaChoice = actor;
 let telegramResponders = new Map();
+let memberResponders = new Map();
+let managedRoster = [];
 let selected = 'INC-121';
 let activeTab = 'brief';
 let familyView = 'map';
@@ -127,15 +129,21 @@ let renderedPage;
 let workspaceEntrance;
 let revealObserver;
 let simulatorDraft = {};
-let notificationHistory = false;
+let notificationPanel = null;
 let automaticTelegram = false;
 let telegramOutboxBusy = false;
 let deliveryState;
 let deliveryPreview;
 const channelSetup = {
   sms:{name:'SMS',provider:'Twilio',setup:'https://console.twilio.com/',fields:[['TWILIO_ACCOUNT_SID','Account SID'],['TWILIO_AUTH_TOKEN','Auth token',true],['TWILIO_FROM','SMS-capable sender number']]},
-  email:{name:'Email',provider:'Resend',setup:'https://resend.com/api-keys',fields:[['RESEND_API_KEY','API key',true],['ALERT_EMAIL_FROM','Verified sender email']]},
+  email:{name:'Email'},
   telegram:{name:'Telegram',provider:'Telegram Bot API',setup:'https://t.me/BotFather',fields:[['TELEGRAM_BOT_TOKEN','BotFather token',true],['TELEGRAM_CHAT_ID','Chat ID or public channel username']]},
+};
+const emailSetup = {
+  gmail:{provider:'Gmail',setup:'https://myaccount.google.com/apppasswords',link:'Create Google app password',
+    fields:[['GMAIL_ADDRESS','Sending Gmail address'],['GMAIL_APP_PASSWORD','Google app password',true]]},
+  resend:{provider:'Resend',setup:'https://resend.com/api-keys',link:'Open Resend',
+    fields:[['RESEND_API_KEY','Resend API key',true],['ALERT_EMAIL_FROM','Verified sender address']]},
 };
 
 const refreshPitchVoices = setupPitchVoice(pitchWindow, () => connected || checkingGemini, () => localPitchVoice);
@@ -154,19 +162,33 @@ function view() {
 
 function renderPersonaChoices() {
   const existingFocus = document.activeElement?.dataset.personaChoice;
-  personaChoice = telegramResponders.has(actorChoice) || teammates.includes(actorChoice) ? actorChoice : teammates[0];
+  const addFocused = document.activeElement?.hasAttribute('data-add-member');
+  const manageFocused = document.activeElement?.hasAttribute('data-manage-members');
+  personaChoice = memberResponders.has(actorChoice) || telegramResponders.has(actorChoice) || teammates.includes(actorChoice) ? actorChoice : teammates[0];
   updatePersonaTrigger();
   const group = (label,entries,telegram=false)=>`<div class="persona-group" role="group" aria-label="${label}">
     <div class="persona-group-label" aria-hidden="true">${label}</div>
-    ${entries.map(([key,displayName])=>{
+    ${entries.map(([key,displayName,channels])=>{
       const initials = (displayName.match(/\p{L}+/gu) || []).slice(0,2).map(word=>word[0]).join('').toUpperCase() || '•';
       return `<button type="button" class="persona-option" role="menuitemradio" aria-checked="${key===personaChoice}" tabindex="-1"
         data-persona-choice="${html(key)}"><span class="persona-avatar ${telegram?'telegram-avatar':''}" aria-hidden="true">${html(initials)}</span>
-        <span>${html(displayName)}</span><span class="persona-check" aria-hidden="true">✓</span></button>`;
+        <span>${html(displayName)}${channels?`<small class="persona-channels">${html(channels)}</small>`:''}</span><span class="persona-check" aria-hidden="true">✓</span></button>`;
     }).join('')}</div>`;
-  personaMenu.innerHTML = `${telegramResponders.size ? group('Paired Telegram responders',[...telegramResponders],true) : ''}
+  const linked=new Set([...memberResponders.values()].flatMap(person=>person.telegram?[telegramPersonaKey(person.telegram)]:[]));
+  const paired=[...telegramResponders].filter(([key])=>!linked.has(key));
+  const members=[...memberResponders].map(([key,member])=>[key,member.name,[member.telegram?'Telegram':'',member.email?'Outlook email':''].filter(Boolean).join(' · ')]);
+  personaMenu.innerHTML = `${location.protocol.startsWith('http')?`<button type="button" class="persona-option persona-add" role="menuitem" tabindex="-1" data-add-member>
+    <span class="persona-avatar" aria-hidden="true">+</span><span>Add team member</span></button>
+    <button type="button" class="persona-option persona-add" role="menuitem" tabindex="-1" data-manage-members>
+    <span class="persona-avatar" aria-hidden="true">≡</span><span>Manage people</span></button>`:''}
+    ${members.length ? group('Team members',members) : ''}
+    ${paired.length ? group('Paired Telegram responders',paired,true) : ''}
     ${group('Demo teammates',teammates.map(name=>[name,name]))}`;
-  if (existingFocus && personaMenu.matches(':popover-open')) focusPersonaChoice(existingFocus);
+  if (personaMenu.matches(':popover-open')) {
+    if (addFocused) personaMenu.querySelector('[data-add-member]')?.focus();
+    else if (manageFocused) personaMenu.querySelector('[data-manage-members]')?.focus();
+    else if (existingFocus) focusPersonaChoice(existingFocus);
+  }
 }
 
 function focusPersonaChoice(choice = personaChoice) {
@@ -175,11 +197,14 @@ function focusPersonaChoice(choice = personaChoice) {
 }
 
 function updatePersonaTrigger() {
-  const name = telegramResponders.get(personaChoice) || personaChoice;
+  const name = responderDisplayName(personaChoice);
   personaName.textContent = name;
   persona.setAttribute('aria-label',`Act as responder, ${name}`);
-  persona.toggleAttribute('data-linked',telegramResponders.has(personaChoice));
+  persona.toggleAttribute('data-linked',telegramResponders.has(personaChoice) || Boolean(memberResponders.get(personaChoice)?.telegram));
 }
+
+function responderDisplayName(key) { return memberResponders.get(key)?.name || telegramResponders.get(key) || key; }
+function telegramPersonaKey(person) { return `telegram:${person.id}:${person.destination}`; }
 
 function positionPersonaMenu() {
   const anchor = persona.getBoundingClientRect();
@@ -196,12 +221,20 @@ function positionPersonaMenu() {
   personaMenu.dataset.side = openAbove ? 'above' : 'below';
 }
 
-function syncTelegramResponders(people) {
-  const responders = new Map(people.map(person=>[`telegram:${person.id}:${person.destination}`,person.label]));
-  if (responders.size===telegramResponders.size && [...responders].every(([key,label])=>telegramResponders.get(key)===label)) return;
+function syncTelegramResponders({people,members=[]}) {
+  const responders = new Map(people.map(person=>[telegramPersonaKey(person),person.label]));
+  const roster = new Map(members.map(member=>[`member:${member.id}`,member]));
+  if (JSON.stringify([...responders])===JSON.stringify([...telegramResponders]) &&
+      JSON.stringify([...roster])===JSON.stringify([...memberResponders])) return;
   telegramResponders = responders;
+  memberResponders = roster;
+  const linkedChoice=[...roster].find(([,person])=>person.telegram && telegramPersonaKey(person.telegram)===actorChoice);
+  if (linkedChoice) {
+    actorChoice=linkedChoice[0];
+    sessionStorage.setItem('ic-actor',actorChoice);
+  }
   renderPersonaChoices();
-  const name = telegramResponders.get(personaChoice) || personaChoice;
+  const name = responderDisplayName(personaChoice);
   if (name!==actor) {
     actor = name;
     render();
@@ -982,7 +1015,8 @@ function incidentWork(incident,state) {
   const task = state.tasks[id];
   const acknowledged = incident.activity?.find(item=>item.status==='Acknowledged' && item.time>=openedAt);
   const localAcceptance = task?.acceptedAt>=openedAt ? {acceptedAt:task.acceptedAt,acceptedBy:task.by}
-    : acknowledged ? {acceptedAt:acknowledged.time,acceptedBy:acknowledged.who} : {};
+    : acknowledged ? {acceptedAt:acknowledged.time,acceptedBy:acknowledged.who}
+    : task?.status==='claimed' && !task.acceptedAt ? {acceptedBy:task.by} : {};
   return {key:id+'/'+openedAt,incident:id,title,service,openedAt,company:incident.company,fingerprint:incident.fingerprint,
     level:incidentPriority(incident,state),...localAcceptance};
 }
@@ -1543,7 +1577,7 @@ function render() {
   unreadBadge.hidden = !unread;
   unreadBadge.textContent = unread>99 ? '99+' : unread;
   document.querySelector('#notifications').setAttribute('aria-label',unread ? `Notifications, ${unread} unread` : 'Notifications');
-  if (notificationHistory && dialog.open) refreshNotificationHistory();
+  if (notificationPanel && dialog.open) refreshNotificationHistory();
   const search = document.querySelector('#search');
   if (search) search.value = query;
   if (focusKeys.length) {
@@ -1620,7 +1654,7 @@ function choose(id) {
   cutoff = '23:59';
 }
 function openDialog(kicker,title,content) {
-  notificationHistory = false;
+  notificationPanel = null;
   dialog.innerHTML = `<div class="dialog-head"><div><div class="kicker">${html(kicker)}</div><h2 id="dialog-title">${html(title)}</h2></div><button data-close aria-label="Close dialog">✕</button></div><div class="dialog-body">${content}</div>`;
   if (!dialog.open) dialog.showModal();
   else dialog.querySelector('[data-close]').focus({preventScroll:true});
@@ -1688,18 +1722,64 @@ function draft() {
 
 function showNotifications() {
   openDialog('Incident desk','Notifications',`
-    <div class="notification-toolbar row">
-      <span class="quiet small" data-unread-summary></span><div class="buttons">
-      <button class="small" data-mark-all>Mark all as read</button>
-      <button class="small" data-toggle-sound aria-pressed="${sound}">Sound ${sound?'on':'off'}</button></div></div>
-    <ul class="notification-history" data-notification-history></ul>`);
-  notificationHistory = true;
+    <div class="tabs notification-tabs" role="group" aria-label="Notification views">
+      <button class="tab" data-notification-panel="history" aria-pressed="true" aria-controls="notification-history-panel">Activity</button>
+      <button class="tab" data-notification-panel="accepted" aria-pressed="false" aria-controls="notification-accepted-panel">Accepted</button>
+    </div>
+    <section id="notification-history-panel" aria-label="Notification activity">
+      <div class="notification-toolbar row">
+        <span class="quiet small" data-unread-summary></span><div class="buttons">
+        <button class="small" data-mark-all>Mark all as read</button>
+        <button class="small" data-toggle-sound aria-pressed="${sound}">Sound ${sound?'on':'off'}</button></div></div>
+      <ul class="notification-history" data-notification-history></ul>
+    </section>
+    <section id="notification-accepted-panel" aria-label="Accepted requests" hidden>
+      <ul class="notification-history" data-accepted-requests></ul>
+    </section>`);
+  notificationPanel = 'history';
   refreshNotificationHistory();
+}
+
+function refreshAcceptedRequests() {
+  const list = dialog.querySelector('[data-accepted-requests]');
+  const focused = document.activeElement;
+  const focusAttribute = focused?.hasAttribute('data-open-case') ? 'data-open-case' : 'data-resolve-incident';
+  const focusId = list.contains(focused) && focused.getAttribute(focusAttribute);
+  const requests = acceptedIncidentWork(localReportEvents(),workspace.telegramWork);
+  list.innerHTML = requests.flatMap(request=>{
+    const incident = byId(request.incident);
+    if (!incident || incident.triggeredAt===null || incident.groupedUnder) return [];
+    const id = html(request.incident);
+    const level = incidentPriority(incident);
+    const acceptedOn = request.acceptedAt ? ` · ${html(formatIncidentTime(request.acceptedAt))}` : '';
+    return `<li class="notification-record accepted-request">
+      <div class="row"><span class="badge ${level}">${levelName(level,Boolean(workspace.custom[request.incident]))}</span>
+        <span class="badge neutral">${request.closedAt ? 'Report needed' : 'In progress'}</span></div>
+      <strong>${html(incident.title)}</strong>
+      <small class="quiet">${id} · ${html(incident.service)}<br>Accepted by ${html(request.acceptedBy)}${acceptedOn}</small>
+      <div class="buttons"><button class="small" data-open-case="${id}">View incident</button>
+        <button class="small primary" data-resolve-incident="${id}">Write report</button></div>
+    </li>`;
+  }).join('') || '<li class="quiet">No accepted requests need a report. Incidents accepted here or in Telegram will appear here.</li>';
+  if (focusId) {
+    (list.querySelector(`[${focusAttribute}="${CSS.escape(focusId)}"]`) ||
+      dialog.querySelector('[data-notification-panel="accepted"]')).focus({preventScroll:true});
+  }
 }
 
 function refreshNotificationHistory() {
   const list = dialog.querySelector('[data-notification-history]');
   if (!list) return;
+  const accepted = notificationPanel==='accepted';
+  dialog.querySelector('#notification-history-panel').hidden = accepted;
+  dialog.querySelector('#notification-accepted-panel').hidden = !accepted;
+  for (const tab of dialog.querySelectorAll('[data-notification-panel]')) {
+    tab.setAttribute('aria-pressed',String(tab.dataset.notificationPanel===notificationPanel));
+  }
+  if (accepted) {
+    refreshAcceptedRequests();
+    return;
+  }
   const expanded = new Set([...list.querySelectorAll('details[open]')].map(detail=>detail.dataset.noticeKey));
   const focused = document.activeElement;
   const focusKey = focused?.dataset?.markNotice || focused?.closest('[data-notice-key]')?.dataset.noticeKey;
@@ -1758,10 +1838,12 @@ async function deliveryApi(action,payload,signal) {
 }
 
 function deliveryLog(entries) {
-  if (!entries?.length) return '<p class="quiet">No provider submissions in this server session.</p>';
-  const states={accepted:'Accepted by provider',rejected:'Rejected by provider',unknown:'Outcome unknown',duplicate:'Recently submitted'};
+  if (!entries?.length) return '<p class="quiet">No recent provider submissions.</p>';
+  const states={queued:'Queued',sending:'Sending',accepted:'Accepted by provider',rejected:'Rejected by provider',unknown:'Outcome unknown',
+    unavailable:'Connection unavailable',duplicate:'Recently submitted'};
   return `<ul class="archive">${entries.map(entry=>`<li><div class="row"><strong>${html(channelSetup[entry.channel].name)} · ${html(entry.destination)}</strong><span class="badge neutral">${states[entry.status]}</span></div>
     <small>${html(entry.incident || '')} ${html(entry.level || '')}${entry.http ? ' · HTTP ' + entry.http : ''}</small>
+    ${entry.detail ? `<p class="small">${html(entry.detail)}</p>` : ''}
     ${entry.incident ? `<button class="small delivery-open" data-open-case="${html(entry.incident)}">Open incident</button>` : ''}</li>`).join('')}</ul>`;
 }
 
@@ -1780,12 +1862,16 @@ async function showChannels() {
     openDialog('Alert delivery','Delivery setup',`<p>Provider settings stay on this computer. Saving them makes no external request.</p>
       <div class="delivery-channels">${Object.entries(channelSetup).map(([key,channel])=>{
         const status=deliveryState.channels[key];
-        return `<section class="panel"><div class="row"><h3>${channel.name} · ${channel.provider}</h3>
+        return `<section class="panel"><div class="row"><h3>${channel.name} · ${html(status.provider)}</h3>
           <span class="badge neutral">${status.configured ? 'Configured' : 'Needs setup'}</span></div>
           <p><small>${status.recipients.length ? status.recipients.map(item=>html(item.destination)).join(' · ') : 'No destination configured'}</small></p>
           <div class="buttons"><button class="small" data-provider="${key}">${status.configured ? 'Update' : 'Configure'} ${channel.name}</button>
-            ${status.configured ? `<button class="small" data-check-provider="${key}">Check connection</button>` : `<a class="small" target="_blank" rel="noreferrer" href="${channel.setup}">Open ${key==='telegram'?'BotFather':channel.provider}</a>`}
+            ${status.configured ? `<button class="small" data-check-provider="${key}">Check connection</button>` : channel.setup ? `<a class="small" target="_blank" rel="noreferrer" href="${channel.setup}">Open ${key==='telegram'?'BotFather':channel.provider}</a>` : ''}
             ${key==='telegram'?'<button class="small" data-telegram-routing>Team routing</button>':''}</div>
+          ${key==='email'?`<div class="row block"><strong>Automatic email</strong><span class="badge neutral">${deliveryState.emailAutomatic?'On':'Off'}</span></div>
+          <p class="small">Every new incident and confirmed Telegram alert gets an informational email copy. Respond in Telegram.</p>
+          <div class="buttons"><button class="small" data-email-test="review" ${status.configured&&status.recipients.length?'':'disabled'}>Send test email</button>
+            <button class="small" data-email-automatic="${deliveryState.emailAutomatic?'off':'on'}" ${deliveryState.emailAutomatic||status.configured&&status.recipients.length?'':'disabled'}>${deliveryState.emailAutomatic?'Disable':'Enable'} automatic email</button></div>`:''}
           <p class="small quiet" id="check-${key}" role="status"></p></section>`;
       }).join('')}</div><h3 class="block">Recent provider submissions</h3>${deliveryLog(deliveryState.deliveries)}`);
   } catch(error) { if (target.isConnected) deliveryError(error); }
@@ -1800,7 +1886,7 @@ const remainingSeconds = deadline=>Math.max(0,Math.ceil((deadline-Date.now())/10
 
 function routeDetails(route) {
   const deadline=route.stage==='waiting'&&route.deadline ? `<p>Reply by <strong>${html(new Date(route.deadline).toLocaleTimeString('en-CA',{timeZone:'America/Toronto',hour:'2-digit',minute:'2-digit',second:'2-digit'}))} ET</strong> · <strong class="mono" role="timer" aria-live="off" data-telegram-deadline="${route.deadline}">${remainingSeconds(route.deadline)}s</strong> remaining</p>` : '';
-  const reason={critical:'Sent directly to the group because this alert is P1 Critical.',decline:'The private responder declined.',timeout:'The private response window expired.',unavailable:'Telegram did not confirm the private page.'}[route.reason];
+  const reason={critical:'Sent directly to the group because this alert is P1 Critical.',decline:'The private responder declined.',timeout:'The private response window expired.',unavailable:'Telegram did not confirm the private page.',unassigned:'Sent to the team group because no private responder is assigned.'}[route.reason];
   return `<p><strong>${html(route.stage==='completed'?'Fixed':routeLabels[route.stage])}</strong>${route.acceptedBy?' · '+html(route.acceptedBy):''} ${route.test?testBadge:''}</p>
     ${route.owner&&!route.acceptedBy&&['queued-private','sending-private','waiting'].includes(route.stage)?`<p>Responder: ${html(route.owner)}</p>`:''}${deadline}
     ${route.acceptedAt ? `<p>Accepted ${html(formatIncidentTime(route.acceptedAt))}</p>` : ''}
@@ -1815,17 +1901,17 @@ async function showTelegramRouting() {
   try {
     const info=await deliveryApi('telegram-routing');
     setAutomaticIndicator(info.auto.enabled);
-    syncTelegramResponders(info.people);
+    syncTelegramResponders(info);
     if(!dialog.open||!anchor.isConnected)return;
-    openDialog('Alert delivery','Telegram routing',`<p><strong>P1 Critical</strong> goes directly to the team group. Lower severities page the default responder and escalate to the group if declined or unanswered.</p>
+    openDialog('Alert delivery','Telegram routing',`<p><strong>P1 Critical</strong> goes directly to the team group. Lower severities page the default responder when one is assigned, then escalate if declined or unanswered.</p>
       <div class="panel"><div class="row"><h3>Automatic Telegram alerts</h3><span class="badge ${info.auto.enabled?'P2':'neutral'}">${info.auto.enabled?'On':'Off'}</span></div>
       <p>Prepared alerts and custom incidents use these settings when they fire. Scheduled incidents route when the dashboard releases them.</p>
       <form class="delivery-form" data-auto-telegram>
         <label for="automatic-responder">Default private responder</label>
-        <select id="automatic-responder" name="owner">${info.people.map(person=>`<option value="${html(person.id)}" ${person.id===info.auto.owner?'selected':''}>${html(person.label)}</option>`).join('')||'<option value="">No responder paired</option>'}</select>
+        <select id="automatic-responder" name="owner">${options([['','Send to the team group'],...info.people.map(person=>[person.id,person.label])],info.auto.owner)}</select>
         <label for="automatic-wait">Response timeout</label>
         <select id="automatic-wait" name="wait">${[[30,'30 seconds'],[60,'1 minute'],[120,'2 minutes'],[300,'5 minutes']].map(([seconds,label])=>`<option value="${seconds}" ${seconds===info.auto.wait?'selected':''}>${label}</option>`).join('')}</select>
-        <div class="buttons"><button class="small primary" type="submit" ${info.team&&info.people.length?'':'disabled'}>${info.auto.enabled?'Save automatic routing':'Enable automatic routing'}</button>
+        <div class="buttons"><button class="small primary" type="submit" ${info.team?'':'disabled'}>${info.auto.enabled?'Save automatic routing':'Enable automatic routing'}</button>
         ${info.auto.enabled?'<button class="small" type="button" data-disable-auto-telegram>Turn off automatic routing</button>':''}</div>
         <p data-auto-status role="status"></p></form></div>
       <div class="panel"><div class="row"><h3>Team group</h3><button class="small" data-pair-team ${info.botConnected?'':'disabled'}>${info.team?'Replace team group':'Pair team group'}</button></div>
@@ -1914,7 +2000,7 @@ async function deliverSimulation(record) {
 function refreshAutomaticIndicator() {
   if(location.protocol.startsWith('http')) void deliveryApi('telegram-routing').then(info=>{
     setAutomaticIndicator(info.auto.enabled);
-    syncTelegramResponders(info.people);
+    syncTelegramResponders(info);
   }).catch(()=>{});
 }
 
@@ -1951,6 +2037,162 @@ function pairRouteDestination(mode) {
       </form></details>`:''}`);
 }
 
+function rosterEntries({members=[],people,unlinkedEmail=[]}) {
+  const linked=new Set(members.flatMap(member=>member.telegram?[telegramPersonaKey(member.telegram)]:[]));
+  return [...members,...people.filter(person=>!linked.has(telegramPersonaKey(person)))
+    .map(person=>({id:telegramPersonaKey(person),name:person.label,telegram:person})),...unlinkedEmail];
+}
+
+async function manageTeamMembers(message='') {
+  openDialog('Team members','Manage people','<p data-delivery-status role="status">Loading alert recipients…</p>');
+  const anchor=dialog.querySelector('[data-delivery-status]');
+  try {
+    const info=await deliveryApi('telegram-routing');
+    if (!anchor.isConnected) return;
+    managedRoster=rosterEntries(info);
+    syncTelegramResponders(info);
+    openDialog('Team members','Manage people',`
+      ${message?`<p role="status">${html(message)}</p>`:''}
+      <ul class="notification-history">${managedRoster.map(person=>`<li class="notification-record accepted-request">
+        <strong>${html(person.name || person.email)}</strong>
+        <small class="quiet">${html([person.name && person.email,person.telegram?'Telegram paired':''].filter(Boolean).join(' · '))}</small>
+        <div class="buttons"><button class="small" data-edit-member="${html(person.id)}">${person.email?'Edit email':'Add email'}</button>
+        ${person.name&&!person.telegram?`<button class="small" data-member-invite="${html(person.id)}">Telegram link</button>`:''}
+        ${person.email?`<button class="small" data-confirm-member-email="${html(person.id)}">Send confirmation</button>`:''}
+        <button class="small danger" data-review-remove-member="${html(person.id)}">Remove</button></div>
+        <span class="small" data-member-delivery role="status"></span></li>`).join('') || '<li>No alert recipients have been added.</li>'}</ul>
+      <div class="buttons block"><button class="small primary" data-open-member-form>Add team member</button></div>`);
+  } catch (error) { if (anchor.isConnected) deliveryError(error); }
+}
+
+function reviewMemberRemoval(id) {
+  const person=managedRoster.find(item=>item.id===id);
+  if (!person) return;
+  openDialog('Team members','Remove alert recipient?',`<p>Remove <strong>${html(person.name || person.email)}</strong> from Aurelis alert delivery?</p>
+    ${person.telegram?'<p>New private pages will stop. Unanswered pages move to the team group. Manage group membership in Telegram.</p>':''}
+    <p data-delivery-status role="status"></p><div class="buttons"><button class="small" data-manage-members>Cancel</button>
+    <button class="small danger" data-remove-member="${html(id)}">Remove recipient</button></div>`);
+}
+
+async function removeTeamMember(button) {
+  const status=dialog.querySelector('[data-delivery-status]');
+  button.disabled=true;
+  try {
+    await deliveryApi('team-members',{id:button.dataset.removeMember,action:'remove',confirm:true});
+    refreshAutomaticIndicator();
+    if (status.isConnected) void manageTeamMembers('Recipient removed.');
+  } catch (error) { if (status.isConnected) { status.textContent=error.message; button.disabled=false; } }
+}
+
+function memberConfirmationText(result) {
+  return result?.status==='accepted' ? 'Confirmation email accepted by the provider.' : result?.detail || '';
+}
+
+async function resendMemberConfirmation(button) {
+  const status=button.closest('li, .panel')?.querySelector('[data-member-delivery]');
+  if (!status) return;
+  button.disabled=true;
+  status.textContent='Sending the confirmation…';
+  try {
+    const {confirmation}=await deliveryApi('team-members',{id:button.dataset.confirmMemberEmail,action:'confirm-email'});
+    if (status.isConnected) status.textContent=memberConfirmationText(confirmation);
+  } catch (error) { if (status.isConnected) status.textContent=error.message; }
+  finally { if (button.isConnected) button.disabled=false; }
+}
+
+async function showTeamMemberForm(id='') {
+  const heading=id?'Edit recipient':'Add team member';
+  openDialog('Team members',heading,'<p data-delivery-status role="status">Loading Telegram responders…</p>');
+  const anchor=dialog.querySelector('[data-delivery-status]');
+  try {
+    const info=await deliveryApi('telegram-routing');
+    if (!anchor.isConnected) return;
+    syncTelegramResponders(info);
+    const existing=rosterEntries(info).find(person=>person.id===id);
+    if (id && !existing) throw Error('This recipient has been removed.');
+    const emailOnly=id.startsWith('email:');
+    const choices=[...(info.botConnected?[['pair','Create a one-time Telegram link']]:[]),
+      ...info.people.map(person=>[person.id,`Use paired chat: ${person.label}`]),['','Pair Telegram later']];
+    openDialog('Team members',heading,`
+      <form class="delivery-form" data-team-member-form="${html(id)}">
+        ${emailOnly?'':`<label for="member-name">Name</label><input id="member-name" name="name" maxlength="65" value="${html(existing?.name)}" required>`}
+        <label for="member-email">Outlook email address</label><input id="member-email" name="email" type="email" maxlength="180"
+          ${existing?.email && !emailOnly?'':'required'} ${existing?.email?`placeholder="${html(existing.email)}"`:''}>
+        ${existing?.email?`<small class="quiet">Current address: ${html(existing.email)}${emailOnly?'':'. Leave blank to keep it.'}</small>`:''}
+        ${existing?.telegram?`<p class="small">Telegram is paired with ${html(existing.telegram.label)}.</p>`:emailOnly?'':`
+        <label for="member-telegram">Telegram</label><select id="member-telegram" name="telegram">
+          ${options(choices,id?'':choices[0][0])}</select>`}
+        <p class="small quiet">Automatic email sends an informational copy to every saved email recipient. Telegram still handles responses.</p>
+        <p data-delivery-status role="status"></p>
+        <div class="buttons"><button type="submit" class="small primary">${id?'Save changes':'Save team member'}</button><button type="button" class="small" data-manage-members>Cancel</button></div>
+      </form>`);
+  } catch (error) { if (anchor.isConnected) deliveryError(error); }
+}
+
+async function saveTeamMember(form) {
+  const submit=form.querySelector('[type=submit]');
+  const status=form.querySelector('[data-delivery-status]');
+  const values=Object.fromEntries(new FormData(form));
+  const createLink=values.telegram==='pair';
+  submit.disabled=true;
+  status.textContent='Saving the member…';
+  try {
+    const {member,confirmation}=await deliveryApi('team-members',{...values,id:form.dataset.teamMemberForm,telegram:createLink?'':values.telegram});
+    const confirmationText=memberConfirmationText(confirmation);
+    refreshAutomaticIndicator();
+    if (!form.isConnected) return;
+    if (!createLink || member.telegram) {
+      openDialog('Team members','Recipient saved',`<p>${html([member.name,member.email,member.telegram?'Telegram linked':''].filter(Boolean).join(' · '))}</p>
+        ${confirmationText?`<p role="status">${html(confirmationText)}</p>`:''}
+        <button class="small primary" data-manage-members>Manage people</button>`);
+      return;
+    }
+    void showMemberInvite(member.id,false,confirmationText);
+  } catch (error) { if (status.isConnected) status.textContent=error.message; }
+  finally { if (submit.isConnected) submit.disabled=false; }
+}
+
+async function showMemberInvite(id,regenerate=false,confirmation='') {
+  openDialog('Team members','Telegram link',`<p data-delivery-status role="status">Preparing the Telegram link…</p>
+    ${confirmation?`<p class="small">${html(confirmation)}</p>`:''}<button class="small" data-manage-members>Manage people</button>`);
+  const anchor=dialog.querySelector('[data-delivery-status]');
+  try {
+    const invite=await deliveryApi('telegram-discover',{action:'start',mode:'responder',member:id,regenerate});
+    if (!anchor.isConnected || !dialog.open) return;
+    openDialog('Team members','Telegram link for '+invite.name,`
+      <p>Share this one-time link with ${html(invite.name)}. They open it in Telegram and tap <strong>Start</strong>.</p>
+      ${confirmation?`<p class="small">${html(confirmation)}</p>`:''}
+      <p><small>Valid until ${html(formatIncidentTime(invite.expires))}. Regenerating replaces the previous link.</small></p>
+      <div class="buttons"><button class="small primary" data-copy-member-link>Copy Telegram link</button>
+        <a class="small" data-member-link href="${html(invite.url)}" target="_blank" rel="noreferrer">Open Telegram link</a>
+        <button class="small" data-regenerate-member-link="${html(id)}">Regenerate link</button></div>
+      <p data-delivery-status role="status">Waiting for the member to tap Start in Telegram.</p>
+      <button class="small" data-manage-members>Manage people</button>`);
+    const waiting=dialog.querySelector('[data-delivery-status]');
+    try {
+      const match=await waitForRoutePairing(invite.id,waiting,waiting,invite.expires);
+      if (match) {
+        refreshAutomaticIndicator();
+        openDialog('Team members','Member linked',`<p>${html(match.detail)}</p><button class="small primary" data-manage-members>Manage people</button>`);
+      }
+    } catch (error) { if (waiting.isConnected) waiting.textContent=error.message; }
+  } catch (error) { if (anchor.isConnected) anchor.textContent=error.message; }
+}
+
+async function waitForRoutePairing(id,anchor,status=anchor,expires=Date.now()+5*60_000) {
+  const initialStatus=status.textContent;
+  while (Date.now()<expires) {
+    await new Promise(resolve=>setTimeout(resolve,Math.min(4000,expires-Date.now())));
+    if (!anchor.isConnected || !dialog.open) return;
+    if (Date.now()>=expires) break;
+    const match=await deliveryApi('telegram-discover',{action:'check',id});
+    if (!anchor.isConnected || !dialog.open) return;
+    if (match.saved) return match;
+    if (status.textContent!==(match.detail || initialStatus)) status.textContent=match.detail || initialStatus;
+  }
+  throw Error('Pairing timed out. Create a fresh pairing link to try again.');
+}
+
 async function startRoutePair(form) {
   const mode=form.dataset.routePair;
   const anchor=form.querySelector('[data-route-pairing]');
@@ -1966,17 +2208,8 @@ async function startRoutePair(form) {
          <p>If the bot is already in the group, post this command there:</p><p><code>${html(result.groupCommand)}</code></p></div>`
       : `<div class="panel"><a target="_blank" rel="noreferrer" href="${html(result.url)}">One-time responder link</a><p>Have the intended responder open this link in their Telegram account and tap Start.</p></div>`;
     status.textContent='Waiting for the pairing command in Telegram…';
-    for(let attempt=0;attempt<65;attempt++){
-      await new Promise(resolve=>setTimeout(resolve,4000));
-      if(!anchor.isConnected||!dialog.open)return;
-      const match=await deliveryApi('telegram-discover',{action:'check',id:result.id});
-      if(!anchor.isConnected)return;
-      if(match.saved){
-        openDialog('Telegram routing','Destination paired',`<p>${html(match.detail)}</p><button class="small primary" data-telegram-routing>View Telegram routing</button>`);
-        return;
-      }
-    }
-    status.textContent='Pairing timed out. Create a fresh pairing link to try again.';
+    const match=await waitForRoutePairing(result.id,anchor,status);
+    if (match) openDialog('Telegram routing','Destination paired',`<p>${html(match.detail)}</p><button class="small primary" data-telegram-routing>View Telegram routing</button>`);
   }catch(error){if(status.isConnected)status.textContent=error.message;}
   finally{if(submit.isConnected)submit.disabled=false;}
 }
@@ -2037,6 +2270,7 @@ async function openTelegramNotice(incidentId='',recipient='') {
 function showTelegramNotice(notice,recipient) {
   openDialog(notice.incident,'Preview Telegram notification',`
     <p><strong>To ${html(notice.label)}</strong> · ${notice.group?'One post in the group':'Private chat'}</p>
+    ${emailCopySummary(notice.emailRecipients)}
     ${notice.test?`<p>${testBadge} · This message includes the test description and any recommended actions.</p>`:''}
     ${notice.wait?`<p>The responder has <strong>${notice.wait} seconds</strong> to reply. A decline or timeout escalates to <strong>${html(notice.team)}</strong>.</p>`:''}
     <section class="panel"><p class="chat-answer">${html(notice.text)}</p>${notice.group?'<small>The group post includes the responder enrollment button if a link has been created.</small>':''}</section>
@@ -2045,10 +2279,15 @@ function showTelegramNotice(notice,recipient) {
     <button class="small primary" data-send-notice="${html(notice.token)}">${notice.wait?'Send and start timer':'Send notification'}</button></div>`);
 }
 
+function emailCopySummary(recipients) {
+  return recipients?.length ? `<p class="small"><strong>Email copy</strong> · ${recipients.map(html).join(' · ')}. Responses stay in Telegram.</p>` : '';
+}
+
 function previewTelegramRoute(incident,preview) {
   openDialog(incident,'Preview Telegram route',`
     ${preview.messages.map(message=>`<section class="panel block"><h3>${html(message.destination)}</h3><p class="chat-answer">${html(message.body)}</p></section>`).join('')}
     ${preview.canStart?`<p>${preview.direct?`Send to <strong>${html(preview.team)}</strong> now.`:`Page <strong>${html(preview.owner)}</strong> now. Send to <strong>${html(preview.team)}</strong> if the responder declines or misses the deadline.`}</p>`:`<p><strong>${html(preview.missing)}</strong></p>`}
+    ${emailCopySummary(preview.emailRecipients)}
     <div class="buttons"><button class="small" data-route-incident="${html(incident)}">Back</button>
     ${preview.canStart?`<button class="small primary" data-start-route="${html(preview.token)}">Confirm and start live routing</button>`:'<button class="small" data-telegram-routing>Routing setup</button>'}</div><p data-delivery-status role="status"></p>`);
 }
@@ -2074,25 +2313,67 @@ async function trackTelegramRoute(id,initial) {
   }catch(error){if(slot.isConnected)slot.textContent=error.message;}
 }
 
-function providerForm(key) {
-  const channel=channelSetup[key];
+function providerForm(key,provider = deliveryState?.channels.email.providerKey || 'gmail') {
+  const isEmail=key==='email';
+  const channel=isEmail ? {...channelSetup.email,...emailSetup[provider]} : channelSetup[key];
   if (!channel) return;
-  const saved=deliveryState?.channels[key].savedFields || [];
+  const selected=deliveryState?.channels[key];
+  const saved=(!isEmail || selected?.providerKey===provider) && selected?.savedFields || [];
   const guidance={
     sms:'Use a Twilio account and an SMS-capable sender that can send custom texts to Canadian numbers. Enter the sender in international format, including the +.',
-    email:'Verify a domain you control in Resend, then create a sending-access API key for that domain and enter a sender address on it.',
+    email:provider==='gmail' ? 'Use a personal Gmail account with 2-Step Verification. Create an app password for Aurelis and paste it below.'
+      : 'Verify a domain you control in Resend, then create a sending-access API key and enter a sender address on that domain.',
     telegram:'Paste your BotFather token and select Pair and save my chat. Aurelis will save and verify the connection after you tap Start in your private chat with the bot.',
   };
   openDialog(channel.provider,'Configure ' + channel.name,`<p>${guidance[key]}</p>
-    <p><a target="_blank" rel="noreferrer" href="${channel.setup}">Open ${key==='telegram'?'BotFather':channel.provider}</a>
-    ${key==='email'?' · <a target="_blank" rel="noreferrer" href="https://resend.com/domains">Verified domains</a>':''}</p>
-    <form class="delivery-form" data-provider-form="${key}" autocomplete="off">
+    ${isEmail?`<div class="tabs notification-tabs" role="group" aria-label="Email provider">${Object.entries(emailSetup).map(([id,item])=>
+      `<button class="tab" data-email-provider="${id}" aria-pressed="${id===provider}">${item.provider}</button>`).join('')}</div>`:''}
+    <p><a target="_blank" rel="noreferrer" href="${channel.setup}">${channel.link || `Open ${key==='telegram'?'BotFather':channel.provider}`}</a>
+    ${isEmail&&provider==='resend'?' · <a target="_blank" rel="noreferrer" href="https://resend.com/domains">Verified domains</a>':''}</p>
+    <form class="delivery-form" data-provider-form="${key}" ${isEmail?`data-email-service="${provider}"`:''} autocomplete="off">
       ${channel.fields.map(([id,label,masked])=>`<label for="${id}">${label}${saved.includes(id) ? ' · Saved; leave blank to keep' : ''}</label>
       <input id="${id}" name="${id}" type="${masked?'password':'text'}" maxlength="180" autocomplete="off" ${saved.includes(id) ? '' : 'required'}>`).join('')}
+      ${isEmail?`<label for="email-recipients">Alert recipients · one address per line</label>
+      <textarea id="email-recipients" name="recipients" rows="3" maxlength="1500" placeholder="${selected?.recipients.length?'Leave blank to keep saved recipients':'oncall@example.com'}"></textarea>
+      ${selected?.recipients.length?`<p class="small quiet">Saved recipients: ${selected.recipients.map(recipient=>html(recipient.destination)).join(' · ')}.</p>`:''}
+      <p class="small quiet">After changing the sender or recipients, send a test and enable automatic email when ready.</p>`:''}
       ${key==='telegram'?'<div class="buttons"><button class="small primary" type="button" data-pair-personal>Pair and save my chat</button><button class="small" type="button" data-find-chat>Find chat ID manually</button></div><div id="telegram-pairing"></div>':''}
       <p data-delivery-status role="status"></p>
       <div class="buttons"><button class="small primary" type="submit">Save settings</button><button class="small" type="button" data-channels>Back</button></div>
     </form>`);
+}
+
+async function setEmailAutomation(button) {
+  const output=dialog.querySelector('#check-email');
+  button.disabled=true;
+  try {
+    await deliveryApi('email-automatic',{enabled:button.dataset.emailAutomatic==='on'});
+    if (button.isConnected) void showChannels();
+  } catch (error) {
+    if (button.isConnected) { output.textContent=error.message; button.disabled=false; }
+  }
+}
+
+function reviewEmailTest() {
+  const recipients=deliveryState.channels.email.recipients;
+  openDialog('Email alerts','Send test email',`<p>Send the <strong>Aurelis demo test alert</strong> to:</p>
+    <ul class="archive">${recipients.map(item=>`<li>${html(item.destination)}</li>`).join('')}</ul>
+    <p data-delivery-status role="status"></p><div class="buttons">
+    <button class="small primary" data-email-test="confirm">Confirm test email</button><button class="small" data-channels>Back</button></div>`);
+}
+
+async function sendEmailTest(button) {
+  const target=dialog.querySelector('[data-delivery-status]');
+  button.disabled=true;
+  target.textContent='Submitting the test to your email provider…';
+  try {
+    const {results}=await deliveryApi('email-test',{confirm:true});
+    if (target.isConnected) openDialog('Email alerts','Test email results',`
+      <p>Check your recipients’ inboxes, including junk or quarantine, before enabling automatic email.</p>
+      ${deliveryLog(results)}<button class="small" data-channels>Back to delivery setup</button>`);
+  } catch (error) {
+    if (target.isConnected) { deliveryError(error); button.disabled=false; }
+  }
 }
 
 async function checkProvider(key) {
@@ -2494,6 +2775,10 @@ document.addEventListener('click',event=>{
   else if ('live' in data) { cutoff='23:59'; render(); }
   else if ('handoff' in data) draft();
   else if ('notifications' in data) showNotifications();
+  else if (data.notificationPanel) {
+    notificationPanel = data.notificationPanel;
+    refreshNotificationHistory();
+  }
   else if (data.alertFilter) { alertFilter=data.alertFilter; render(); }
   else if (data.radarIncident) openCase(data.radarIncident);
   else if (data.radarFilter) {
@@ -2541,6 +2826,22 @@ document.addEventListener('click',event=>{
     },error=>{if(target.isConnected){deliveryError(error);button.disabled=false;}});
   }
   else if (data.checkProvider) void checkProvider(data.checkProvider);
+  else if (data.emailProvider) providerForm('email',data.emailProvider);
+  else if (data.emailAutomatic) void setEmailAutomation(button);
+  else if (data.emailTest==='review') reviewEmailTest();
+  else if (data.emailTest==='confirm') void sendEmailTest(button);
+  else if ('manageMembers' in data && !personaMenu.contains(button)) void manageTeamMembers();
+  else if ('openMemberForm' in data) void showTeamMemberForm();
+  else if (data.editMember) void showTeamMemberForm(data.editMember);
+  else if (data.memberInvite) void showMemberInvite(data.memberInvite);
+  else if (data.regenerateMemberLink) void showMemberInvite(data.regenerateMemberLink,true);
+  else if (data.reviewRemoveMember) reviewMemberRemoval(data.reviewRemoveMember);
+  else if (data.removeMember) void removeTeamMember(button);
+  else if (data.confirmMemberEmail) void resendMemberConfirmation(button);
+  else if ('copyMemberLink' in data) {
+    const link=dialog.querySelector('[data-member-link]');
+    void navigator.clipboard.writeText(link.href).then(()=>{button.textContent='Link copied';},()=>{button.textContent='Use the Telegram link above';});
+  }
   else if ('pairPersonal' in data) void discoverTelegram(undefined,true);
   else if ('findChat' in data) void discoverTelegram();
   else if (data.checkChat) void discoverTelegram(data.checkChat);
@@ -2608,6 +2909,11 @@ document.addEventListener('submit',event=>{
     void ask(document.querySelector('#question').value);
   }
   const form=event.target;
+  if (form.matches('[data-team-member-form]')) {
+    event.preventDefault();
+    void saveTeamMember(form);
+    return;
+  }
   if (form.id==='simulation-form') {
     event.preventDefault();
     simulatorDraft = {...simulatorDraft,...Object.fromEntries(new FormData(form))};
@@ -2731,7 +3037,9 @@ document.addEventListener('submit',event=>{
   const isSettings=Boolean(form.dataset.providerForm);
   const payload=isSettings ? {
     channel:form.dataset.providerForm,
-    fields:Object.fromEntries([...values.entries()].map(([name,value])=>[name,value.trim()]).filter(([,value])=>value)),
+    fields:Object.fromEntries([...values.entries()].map(([name,value])=>[name,value.trim()]).filter(([name,value])=>name!=='recipients' && value)),
+    ...(form.dataset.emailService ? {provider:form.dataset.emailService,
+      recipients:values.get('recipients').split(/[\n,;]+/).map(value=>value.trim()).filter(Boolean)} : {}),
   } : {incident:incident.id,level:incidentPriority(incident),targets:values.getAll('target')};
   void deliveryApi(isSettings?'settings':'preview',payload).then(result=>{
     if (!dialog.open || !target.isConnected) return;
@@ -2771,6 +3079,13 @@ document.addEventListener('input',event=>{
   }
 });
 document.addEventListener('change',event=>{
+  if (event.target.id==='member-telegram') {
+    const name=event.target.form.elements.name;
+    const label=event.target.selectedOptions[0]?.textContent.trim();
+    const prefix='Use paired chat: ';
+    if (!name.value.trim() && label?.startsWith(prefix)) name.value=label.slice(prefix.length);
+    return;
+  }
   if (event.target.id==='report-company') {
     reportCompany=event.target.value ? event.target.value.slice('company:'.length) : null;
     render();
@@ -2832,13 +3147,16 @@ personaMenu.addEventListener('beforetoggle',event=>{
 personaMenu.addEventListener('toggle',()=>{
   const open = personaMenu.matches(':popover-open');
   persona.setAttribute('aria-expanded',String(open));
-  if (open && !personaMenu.contains(document.activeElement)) focusPersonaChoice();
+  if (open) {
+    if (!personaMenu.contains(document.activeElement)) focusPersonaChoice();
+    refreshAutomaticIndicator();
+  }
 });
 persona.addEventListener('keydown',event=>{
   if (!['ArrowDown','ArrowUp'].includes(event.key)) return;
   event.preventDefault();
   if (!personaMenu.matches(':popover-open')) personaMenu.showPopover();
-  const choices = [...personaMenu.querySelectorAll('[data-persona-choice]')];
+  const choices = [...personaMenu.querySelectorAll('[role="menuitemradio"],[role="menuitem"]')];
   (event.key==='ArrowDown' ? choices[0] : choices.at(-1))?.focus();
 });
 personaMenu.addEventListener('keydown',event=>{
@@ -2850,17 +3168,25 @@ personaMenu.addEventListener('keydown',event=>{
   }
   if (!['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
   event.preventDefault();
-  const choices = [...personaMenu.querySelectorAll('[data-persona-choice]')];
+  const choices = [...personaMenu.querySelectorAll('[role="menuitemradio"],[role="menuitem"]')];
   const current = choices.indexOf(document.activeElement);
   const next = {Home:0,End:choices.length-1,ArrowDown:(current+1)%choices.length,
     ArrowUp:(current+choices.length-1)%choices.length}[event.key];
   choices[next]?.focus();
 });
 personaMenu.addEventListener('click',event=>{
+  const action=event.target.closest('[data-add-member],[data-manage-members]');
+  if (action) {
+    personaMenu.hidePopover();
+    persona.focus({preventScroll:true});
+    if (action.hasAttribute('data-manage-members')) void manageTeamMembers();
+    else void showTeamMemberForm();
+    return;
+  }
   const option = event.target.closest('[data-persona-choice]');
   if (!option) return;
   actorChoice = personaChoice = option.dataset.personaChoice;
-  actor = telegramResponders.get(personaChoice) || personaChoice;
+  actor = responderDisplayName(personaChoice);
   sessionStorage.setItem('ic-actor',actorChoice);
   updatePersonaTrigger();
   for (const item of personaMenu.querySelectorAll('[data-persona-choice]')) {

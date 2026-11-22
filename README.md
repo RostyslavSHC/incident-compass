@@ -6,7 +6,7 @@ A local cloud incident desk for the Brampton AI Innovator challenge. It includes
 
 ## Open the dashboard
 
-On Windows, double-click `Start Incident Compass.cmd` after installing Node.js 22 or newer. Or run the following from this directory. There are no project dependencies to install.
+Install Node.js 22 or newer and run `npm ci` from this directory. On Windows, double-click `Start Incident Compass.cmd` to start Aurelis. You can also start it from the command line.
 
 ```powershell
 node --env-file-if-exists=.env server.mjs
@@ -62,6 +62,18 @@ To enable the optional [Kokoro neural voice](https://github.com/hexgrad/kokoro/t
 npm install --no-save --package-lock=false kokoro-js@1.2.1
 npm start
 ```
+
+## Enable email alerts
+
+Run `npm ci` to install Gmail SMTP support, then start the local server. Open **Alerts → Delivery setup → Configure Email** and choose **Gmail**. Use a personal Gmail sender with 2-Step Verification and generate a [Google app password](https://myaccount.google.com/apppasswords) for Aurelis. Enter the sending address and app password in the local form. Add or replace recipients with one address per line. Credentials and recipient addresses are saved in ignored local settings files.
+
+Use **Check connection** to verify the sign-in and **Send test email** to send one demo message per saved recipient. Confirm inbox delivery, then select **Enable automatic email**. It sends an informational copy of each new incident or confirmed Telegram alert. Each recipient gets one copy per alert or route, including when a private page escalates. Accept, decline, and mark incidents fixed in Telegram. Changing email credentials or recipients turns automatic email off until enabled again. Resend remains available if you already have a verified sending domain.
+
+To add someone from the dashboard, open the responder picker and select **Add team member**. Enter the member’s name and Outlook email address. Select a chat that is already paired or copy a one-time link for the member to open and tap **Start** in Telegram. Aurelis shows both linked channels on one profile. Email goes to all saved recipients when automatic email is enabled. Private Telegram pages still go to the selected responder, and adding a private chat does not add its owner to the Telegram group.
+
+Use **Manage people** in the responder menu to change an email address, resend its confirmation, or remove a recipient. Saving a new address sends a confirmation email to that address, including when automatic incident email is off. Removing a linked member stops email copies and future private pages for that profile. Unanswered Telegram pages go to the paired team group. Manage group membership in Telegram.
+
+For a pending pairing, choose **Manage people → Telegram link** to reopen the saved invite. Choose **Regenerate link** to replace it. The invite is valid for 30 minutes. Aurelis can prepare the link while offline if it already knows the bot’s username. The member’s **Start** still needs a connection to reach Aurelis. When Gmail fails before submission, Aurelis queues the confirmation for retry for up to a day.
 
 ## Demo path
 

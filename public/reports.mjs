@@ -64,8 +64,19 @@ export function mergeIncidentWork(local,telegram) {
       match.acceptedAt=route.acceptedAt;
       match.acceptedBy=route.acceptedBy;
     }
+    match.acceptedBy ||= route.acceptedBy;
   }
   return rows;
+}
+
+export function acceptedIncidentWork(local,telegram) {
+  const latest = new Map();
+  for (const row of mergeIncidentWork(local,telegram)) {
+    const previous = latest.get(row.incident);
+    if (!previous || row.openedAt>previous.openedAt) latest.set(row.incident,row);
+  }
+  return [...latest.values()].filter(row=>row.acceptedBy && !row.verified)
+    .sort((a,b)=>(b.acceptedAt ?? b.openedAt)-(a.acceptedAt ?? a.openedAt));
 }
 
 export function reportSummary(entries,period) {

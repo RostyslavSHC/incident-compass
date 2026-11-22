@@ -26,6 +26,7 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
   const edits = [];
   const updates = [];
   const answers = [];
+  const automaticEmails = [];
   let editFailure = false;
   let clock = Date.parse('2026-11-21T20:00:00Z');
   let updateId = 0;
@@ -34,6 +35,7 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
   const router = createTelegramRouter({
     connect:async()=>({token:'900000000:mock',owner}),
     now:()=>clock,
+    onEmail:async alert=>automaticEmails.push(alert),
     call:async(token,method,body)=>{
       if (method==='getChatMember') return {ok:true,result:{status:'member'}};
       if (method==='getWebhookInfo') return {ok:true,result:{url:''}};
@@ -85,11 +87,14 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
   assert.equal(sent.length,0);
   assert.ok((await router.recordAlert({...input,event:'invalid-test-event',simulation:undefined})).error);
   assert.ok((await router.sendNotice({token:direct.token,confirm:false})).error);
+  assert.equal(automaticEmails.length,0);
   const privatePage = await router.sendNotice({token:direct.token,confirm:true});
   assert.equal(privatePage.route.stage,'queued-private');
+  assert.equal(automaticEmails[0].key,privatePage.route.id);
   const repeatedPreview = await router.previewNotice({...input,recipient:person.id});
   assert.equal((await router.sendNotice({token:repeatedPreview.token,confirm:true})).route.id,privatePage.route.id);
   assert.equal((await router.sendNotice({token:group.token,confirm:true})).status,'accepted');
+  assert.equal(automaticEmails[1].key,privatePage.route.id);
   assert.ok((await router.sendNotice({token:direct.token,confirm:true})).error);
   await router.step();
   assert.deepEqual(sent.map(message=>message.chat_id),[team.chat,person.chat]);
@@ -136,11 +141,14 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
     await router.step();
     const message = sent.at(-1);
     assert.equal(message.chat_id,owner);
+    assert.equal(automaticEmails.find(alert=>alert.incident===page.route.incident).reason,'alert');
     callback(message,'decline');
     await router.step();
     const escalation = sent.at(-1);
     assert.equal(escalation.chat_id,team.chat);
     assert.match(escalation.text,/Responder declined/);
+    assert.deepEqual(automaticEmails.filter(alert=>alert.incident===page.route.incident).map(alert=>alert.reason),['alert','alert','decline']);
+    assert.equal(new Set(automaticEmails.filter(alert=>alert.incident===page.route.incident).map(alert=>alert.key)).size,1);
     callback(escalation,'claim',owner);
     await router.step();
     assert.equal((await router.list()).routes.find(route=>route.id===page.route.id).stage,'accepted');
@@ -193,6 +201,7 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
     assert.equal(sent.at(-1).chat_id,team.chat);
     assert.match(sent.at(-1).text,/No response before the deadline/);
     assert.deepEqual(edits.at(-1).reply_markup.inline_keyboard,[]);
+    assert.equal(automaticEmails.findLast(alert=>alert.incident==='SIM-A2222222').reason,'timeout');
   });
   await t.test('critical test alerts go straight to the group',async()=>{
     const count = sent.length;
@@ -203,5 +212,31 @@ test('Telegram acknowledgement and automatic test routing',async t=>{
     assert.equal(sent.at(-1).chat_id,team.chat);
     assert.match(sent.at(-1).text,/TEST EVENT/);
     assert.match(sent.at(-1).text,/Immediate routing/);
+    assert.equal(automaticEmails.filter(alert=>alert.incident===page.route.incident).length,1);
+  });
+  await t.test('removing the default responder moves unanswered and new alerts to the team',async()=>{
+    const page=await record('SIM-A7777777','P2');
+    await router.step();
+    assert.equal(sent.at(-1).chat_id,owner);
+    const prior=(await router.list()).people.find(person=>person.id==='default');
+    await router.removeResponder(prior);
+    assert.equal(await router.defaultRecipientRemoved(),true);
+    assert.equal((await router.list()).auto.owner,'');
+    await router.step();
+    assert.equal(sent.at(-1).chat_id,team.chat);
+    assert.equal((await router.list()).routes.find(route=>route.id===page.route.id).stage,'open-team');
+    const next=await record('SIM-A8888888','P2');
+    assert.equal(next.route.stage,'queued-team');
+    await router.step();
+    assert.equal(sent.at(-1).chat_id,team.chat);
+    assert.match(sent.at(-1).text,/No private responder assigned/);
+  });
+  await t.test('new incidents can email independently of Telegram automation at any priority',async()=>{
+    await router.configureAuto({enabled:false});
+    const result=await record('SIM-A5555555','P1');
+    assert.equal(result.status,'disabled');
+    assert.equal(automaticEmails.find(alert=>alert.incident==='SIM-A5555555').reason,'critical');
+    assert.equal((await record('SIM-A6666666','P4')).status,'disabled');
+    assert.equal(automaticEmails.find(alert=>alert.incident==='SIM-A6666666').reason,'alert');
   });
 });
