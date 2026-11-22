@@ -8,6 +8,8 @@ const main = document.querySelector('#main');
 const dialog = document.querySelector('#dialog');
 const assistantWindow = document.querySelector('#assistant-window');
 const persona = document.querySelector('#persona');
+const personaMenu = document.querySelector('#persona-menu');
+const personaName = document.querySelector('#persona-name');
 const night = document.querySelector('#night');
 const saveKey = 'incident-compass-workspace-v1';
 const windowMs = 30_000;
@@ -26,6 +28,8 @@ const ref = id => `<button type="button" class="ref" data-source="${html(id)}">$
 const documentLink = document => `<button type="button" class="small doc-link" data-source="${html(document.id)}">${html(document.id)} · ${html(document.title)}</button>`;
 const cad = dollars => new Intl.NumberFormat('en-CA', {style:'currency',currency:'CAD',maximumFractionDigits:0}).format(dollars);
 const levels = ['P1','P2','P3'];
+const radarLevels = ['P1','P2','P3','P4'];
+const radarSpots = [[38,47],[62,53],[43,19],[60,81],[15,52],[85,47],[66,19],[35,82],[16,19],[86,20],[13,81],[85,81]];
 const severityNames = {P1:'Critical',P2:'High',P3:'Monitor'};
 const incidentPriority = (incident,state = workspace) => state.custom[incident?.id]?.level
   || state.priorities[incident?.id] || (incident ? priority(incident) : 'P3');
@@ -49,6 +53,7 @@ function read() {
 let workspace = read();
 let actorChoice = sessionStorage.getItem('ic-actor') || teammates[0];
 let actor = teammates.includes(actorChoice) ? actorChoice : teammates[0];
+let personaChoice = actor;
 let telegramResponders = new Map();
 let selected = 'INC-121';
 let activeTab = 'brief';
@@ -71,6 +76,8 @@ let calendarDay;
 let alertFilter = 'all';
 let alertSort = 'severity';
 let alertQuery = '';
+let radarFilter = 'all';
+let radarPage = 0;
 let renderedPage;
 let workspaceEntrance;
 let revealObserver;
@@ -96,11 +103,47 @@ function view() {
 }
 
 function renderPersonaChoices() {
-  persona.innerHTML = `
-    ${telegramResponders.size ? `<optgroup label="Paired Telegram responders">${[...telegramResponders].map(([key,label])=>
-      `<option value="${html(key)}">${html(label)}</option>`).join('')}</optgroup>` : ''}
-    <optgroup label="Demo teammates">${teammates.map(name=>`<option value="${html(name)}">${html(name)}</option>`).join('')}</optgroup>`;
-  persona.value = telegramResponders.has(actorChoice) || teammates.includes(actorChoice) ? actorChoice : teammates[0];
+  const existingFocus = document.activeElement?.dataset.personaChoice;
+  personaChoice = telegramResponders.has(actorChoice) || teammates.includes(actorChoice) ? actorChoice : teammates[0];
+  updatePersonaTrigger();
+  const group = (label,entries,telegram=false)=>`<div class="persona-group" role="group" aria-label="${label}">
+    <div class="persona-group-label" aria-hidden="true">${label}</div>
+    ${entries.map(([key,displayName])=>{
+      const initials = (displayName.match(/\p{L}+/gu) || []).slice(0,2).map(word=>word[0]).join('').toUpperCase() || '•';
+      return `<button type="button" class="persona-option" role="menuitemradio" aria-checked="${key===personaChoice}" tabindex="-1"
+        data-persona-choice="${html(key)}"><span class="persona-avatar ${telegram?'telegram-avatar':''}" aria-hidden="true">${html(initials)}</span>
+        <span>${html(displayName)}</span><span class="persona-check" aria-hidden="true">✓</span></button>`;
+    }).join('')}</div>`;
+  personaMenu.innerHTML = `${telegramResponders.size ? group('Paired Telegram responders',[...telegramResponders],true) : ''}
+    ${group('Demo teammates',teammates.map(name=>[name,name]))}`;
+  if (existingFocus && personaMenu.matches(':popover-open')) focusPersonaChoice(existingFocus);
+}
+
+function focusPersonaChoice(choice = personaChoice) {
+  const options = [...personaMenu.querySelectorAll('[data-persona-choice]')];
+  (options.find(option=>option.dataset.personaChoice===choice) || options[0])?.focus();
+}
+
+function updatePersonaTrigger() {
+  const name = telegramResponders.get(personaChoice) || personaChoice;
+  personaName.textContent = name;
+  persona.setAttribute('aria-label',`Act as responder, ${name}`);
+  persona.toggleAttribute('data-linked',telegramResponders.has(personaChoice));
+}
+
+function positionPersonaMenu() {
+  const anchor = persona.getBoundingClientRect();
+  const gutter = 10;
+  const width = Math.min(286,document.documentElement.clientWidth-gutter*2);
+  const left = Math.max(gutter,Math.min(anchor.left,document.documentElement.clientWidth-width-gutter));
+  const below = window.innerHeight-anchor.bottom-gutter;
+  const above = anchor.top-gutter;
+  const openAbove = below<180 && above>below;
+  personaMenu.style.setProperty('--persona-left',`${left}px`);
+  personaMenu.style.setProperty('--persona-width',`${width}px`);
+  personaMenu.style.setProperty('--persona-max-height',`${Math.max(0,(openAbove ? above : below)-7)}px`);
+  personaMenu.style.setProperty('--persona-edge',`${openAbove ? window.innerHeight-anchor.top+7 : anchor.bottom+7}px`);
+  personaMenu.dataset.side = openAbove ? 'above' : 'below';
 }
 
 function syncTelegramResponders(people) {
@@ -108,7 +151,7 @@ function syncTelegramResponders(people) {
   if (responders.size===telegramResponders.size && [...responders].every(([key,label])=>telegramResponders.get(key)===label)) return;
   telegramResponders = responders;
   renderPersonaChoices();
-  const name = telegramResponders.get(persona.value) || persona.value;
+  const name = telegramResponders.get(personaChoice) || personaChoice;
   if (name!==actor) {
     actor = name;
     render();
@@ -595,17 +638,57 @@ function deleteSimulations(state,ids) {
   state.notifications = state.notifications.filter(entry=>!targets.has(entry.id));
 }
 
+function incidentRadar(queue,severityCounts) {
+  const hits = radarFilter==='all' ? queue : queue.filter(incident=>incidentPriority(incident)===radarFilter);
+  const lastPage = Math.max(0,Math.ceil(hits.length/radarSpots.length)-1);
+  radarPage = Math.min(lastPage,radarPage);
+  const start = radarPage*radarSpots.length;
+  const signals = hits.slice(start,start+radarSpots.length);
+  const focusedSignal = signals.find(incident=>incident.id===selected);
+  const caption = focusedSignal ? `${incidentPriority(focusedSignal)} · ${focusedSignal.title}` : 'Select a signal to open its incident.';
+  const filters = [['all',queue.length],...severityCounts.map(({level,count})=>[level,count])];
+  return `<section class="radar" aria-label="Incident radar">
+    <div class="radar-header"><h2><span class="radar-emblem" aria-hidden="true"></span>Incident radar</h2><span class="mono">${queue.length} open</span></div>
+    <div class="radar-scope" role="group" aria-label="Active incident signals">
+      ${signals.map((incident,index)=>{
+        const [x,y] = radarSpots[index];
+        const level = incidentPriority(incident);
+        const label = `${level} ${levelName(level,Boolean(workspace.custom[incident.id]))} · ${incident.title}`;
+        return `<button type="button" class="radar-marker" data-radar-incident="${incident.id}" data-level="${level}"
+          aria-pressed="${incident.id===selected}" aria-label="${html(label)}" style="--x:${x}%;--y:${y}%"><span aria-hidden="true"></span></button>`;
+      }).join('') || '<p class="radar-empty">No signals in this view</p>'}
+    </div>
+    <div class="radar-filters" role="group" aria-label="Filter radar by priority">
+      ${filters.map(([level,count])=>`<button type="button" data-radar-filter="${level}" data-level="${level}"
+        aria-label="${level==='all'?'All priorities':level}, ${count} open" aria-pressed="${radarFilter===level}">
+        ${level==='all'?'All':`<span class="radar-key" aria-hidden="true"></span>${level}`}<span class="radar-count">${count}</span></button>`).join('')}
+    </div>
+    <div class="radar-footer"><p data-radar-caption>${html(caption)}</p>
+      ${lastPage ? `<div class="radar-pages"><button type="button" data-radar-page="-1" aria-label="Previous radar page" ${radarPage===0?'disabled':''}>‹</button>
+        <span class="mono" aria-label="Radar page ${radarPage+1} of ${lastPage+1}">${radarPage+1}/${lastPage+1}</span>
+        <button type="button" data-radar-page="1" aria-label="Next radar page" ${radarPage===lastPage?'disabled':''}>›</button></div>` : ''}</div>
+  </section>`;
+}
+
+function describeRadarSignal(event) {
+  const marker = event.target.closest('[data-radar-incident]');
+  if (!marker) return;
+  const incident = byId(marker.dataset.radarIncident);
+  if (incident) marker.closest('.radar').querySelector('[data-radar-caption]').textContent =
+    `${incidentPriority(incident)} · ${incident.title}`;
+}
+
 function desk() {
   const queue = openIncidents().sort((a,b)=>incidentPriority(a).localeCompare(incidentPriority(b)));
   const incident = byId(selected) || queue[0] || scenarios[0];
   const custom = workspace.custom[incident.id];
   const result = investigate(incident,cutoff);
-  const severityCounts = Object.keys(simulationSeverities).map(level=>({
+  const severityCounts = radarLevels.map(level=>({
     level,count:queue.filter(item=>incidentPriority(item)===level).length,
   }));
   const content = {brief:()=>brief(incident,result), details:()=>caseDetails(incident,result), runbook:()=>incidentRunbooks(result), trace:()=>trace(result), replay:()=>replay(incident,result), compare:()=>compare(incident,result)};
   return `<section class="hero intro"><div><div class="kicker">On-call desk / Brampton AI Innovator</div><h1>THE INCIDENT <em>DESK.</em></h1><p>Review alerts, follow the evidence, and get an engineer on the case.</p></div>
-    <div class="radar" aria-hidden="true"><i style="--size:56px"></i><i style="--size:107px"></i><i style="--size:154px"></i><b style="--x:43%;--y:37%"></b><b style="--x:73%;--y:59%"></b><b style="--x:57%;--y:74%"></b><span class="mono">DEMO SIGNAL</span></div></section>
+    ${incidentRadar(queue,severityCounts)}</section>
     <div class="stats"><div class="stat"><strong data-stat="services">${services.length}</strong><small>Services monitored</small></div><div class="stat"><strong data-stat="active">${queue.length}</strong><small>Active incidents</small></div>
     <div class="stat"><strong data-stat="urgent">${queue.filter(item=>incidentPriority(item)==='P1').length}</strong><small>Urgent incidents</small></div><div class="stat"><strong data-stat="archived">${history.length+Object.values(workspace.custom).filter(test=>test.triggeredAt!==null && test.status==='resolved').length}</strong><small>Archived incidents</small></div></div>
     <div class="desk">
@@ -1698,6 +1781,17 @@ document.addEventListener('click',event=>{
   else if ('handoff' in data) draft();
   else if ('notifications' in data) showNotifications();
   else if (data.alertFilter) { alertFilter=data.alertFilter; render(); }
+  else if (data.radarIncident) openCase(data.radarIncident);
+  else if (data.radarFilter) {
+    radarFilter = data.radarFilter;
+    radarPage = 0;
+    render();
+  }
+  else if (data.radarPage) {
+    radarPage += Number(data.radarPage);
+    render();
+    if (!main.contains(document.activeElement)) main.querySelector('.radar-pages button:not(:disabled)')?.focus({preventScroll:true});
+  }
   else if ('channels' in data) void showChannels();
   else if ('telegramRouting' in data) void showTelegramRouting();
   else if ('disableAutoTelegram' in data) void updateTelegramMode({enabled:false},button);
@@ -1936,12 +2030,57 @@ assistantWindow.addEventListener('close',()=>{
   speech?.abort();
   window.speechSynthesis?.cancel();
 });
-persona.addEventListener('change',()=>{
-  actorChoice = persona.value;
-  actor = telegramResponders.get(actorChoice) || actorChoice;
+personaMenu.addEventListener('beforetoggle',event=>{
+  if (event.newState==='open') positionPersonaMenu();
+});
+personaMenu.addEventListener('toggle',()=>{
+  const open = personaMenu.matches(':popover-open');
+  persona.setAttribute('aria-expanded',String(open));
+  if (open && !personaMenu.contains(document.activeElement)) focusPersonaChoice();
+});
+persona.addEventListener('keydown',event=>{
+  if (!['ArrowDown','ArrowUp'].includes(event.key)) return;
+  event.preventDefault();
+  if (!personaMenu.matches(':popover-open')) personaMenu.showPopover();
+  const choices = [...personaMenu.querySelectorAll('[data-persona-choice]')];
+  (event.key==='ArrowDown' ? choices[0] : choices.at(-1))?.focus();
+});
+personaMenu.addEventListener('keydown',event=>{
+  if (event.key==='Escape' || event.key==='Tab') {
+    if (event.key==='Escape') event.preventDefault();
+    personaMenu.hidePopover();
+    persona.focus({preventScroll:true});
+    return;
+  }
+  if (!['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
+  event.preventDefault();
+  const choices = [...personaMenu.querySelectorAll('[data-persona-choice]')];
+  const current = choices.indexOf(document.activeElement);
+  const next = {Home:0,End:choices.length-1,ArrowDown:(current+1)%choices.length,
+    ArrowUp:(current+choices.length-1)%choices.length}[event.key];
+  choices[next]?.focus();
+});
+personaMenu.addEventListener('click',event=>{
+  const option = event.target.closest('[data-persona-choice]');
+  if (!option) return;
+  actorChoice = personaChoice = option.dataset.personaChoice;
+  actor = telegramResponders.get(personaChoice) || personaChoice;
   sessionStorage.setItem('ic-actor',actorChoice);
+  updatePersonaTrigger();
+  for (const item of personaMenu.querySelectorAll('[data-persona-choice]')) {
+    item.setAttribute('aria-checked',String(item===option));
+  }
+  personaMenu.hidePopover();
+  persona.focus({preventScroll:true});
   render();
 });
+for (const eventName of ['resize','scroll']) {
+  window.addEventListener(eventName,()=>{
+    if (personaMenu.matches(':popover-open')) positionPersonaMenu();
+  },{passive:true});
+}
+main.addEventListener('pointerover',describeRadarSignal);
+main.addEventListener('focusin',describeRadarSignal);
 night.addEventListener('click',()=>{
   const enabled = document.body.classList.toggle('night');
   night.setAttribute('aria-pressed',String(enabled));

@@ -25,8 +25,12 @@
         <a href="#chat" data-view="chat"># General <span id="chat-count" hidden></span></a>
       </nav>
       <div class="top-right">
-        <label class="sr-only" for="persona">Act as responder</label>
-        <select id="persona"></select>
+        <div class="persona-picker">
+          <button class="small persona-trigger" id="persona" type="button" popovertarget="persona-menu" aria-controls="persona-menu" aria-haspopup="menu" aria-expanded="false">
+            <span class="persona-signal" aria-hidden="true"></span><span id="persona-name"></span><span class="persona-caret" aria-hidden="true"></span>
+          </button>
+          <div class="persona-menu" id="persona-menu" popover="auto" role="menu" aria-label="Act as responder"></div>
+        </div>
         <button class="small" id="notifications" data-notifications>Notifications <span id="notification-count" class="count-pill" hidden></span></button>
         <button class="small" id="night" aria-pressed="false" title="Toggle simplified on-call view">3 a.m. mode</button>
       </div>
